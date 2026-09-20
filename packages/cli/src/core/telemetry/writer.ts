@@ -66,6 +66,7 @@ export function buildRouteEvent(input: {
     latencyMs: number;
     cacheHit: boolean;
     promptChars: number;
+    provider?: string;
     tokensIn?: number;
     tokensOut?: number;
   };
@@ -89,6 +90,7 @@ export function buildRouteEvent(input: {
     sessionId: input.sessionId,
     promptHash: input.promptHash,
     promptChars: input.result.promptChars,
+    ...(input.result.provider === undefined ? {} : { provider: input.result.provider }),
     catalogFingerprint: input.catalogFingerprint,
     candidateCount: input.result.shortlist.length,
     candidateIds: bound([...input.result.shortlist], MAX_CANDIDATE_IDS),

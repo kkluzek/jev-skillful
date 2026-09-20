@@ -163,7 +163,10 @@ exceptions.
 
 ## Credential handling
 
-`TYPESAFE_API_KEY` is read from the environment only.
+The selected provider key (`TYPESAFE_API_KEY`, `AI_GATEWAY_API_KEY`, or
+`OPENROUTER_API_KEY`) is read from the environment only. `SKILLFUL_PROVIDER` can explicitly select
+`typesafe`, `vercel`, or `openrouter`; without it the key precedence is TypeSafe, Vercel, then
+OpenRouter. Explicit selection is fail-closed so an inherited key cannot silently change billing.
 
 - Not accepted as a CLI flag, because flags are visible in the process list.
 - Not read from `~/.config/skillful/config.json`. A config file that contains a key-like
@@ -171,6 +174,10 @@ exceptions.
 - Attached to one request header and referenced nowhere else. There are tests asserting the
   key does not appear in a degraded result, in a network error message, or in the request
   body.
+
+Provider defaults match the `typesafe-mcp` connector: direct TypeSafe uses `jev-latest`, Vercel's
+TypeSafe-compatible endpoint uses `typesafe-ai/jev`, and OpenRouter Decisions uses
+`~typesafe/jev-latest`. `SKILLFUL_MODEL` and `SKILLFUL_BASE_URL` remain explicit overrides.
 
 Prompt text is truncated to `maxPromptChars` before transmission, and `--no-prompt-upload`
 sends the catalog with the prompt replaced by a placeholder. The shortlist is still computed

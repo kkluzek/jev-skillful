@@ -12,6 +12,7 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import { detectRuntimes, runtimeLocations } from "./detect.js";
 import { installClaudeCode, uninstallClaudeCode } from "./installers/claude-code.js";
 import { installCodex, uninstallCodex } from "./installers/codex.js";
@@ -27,6 +28,7 @@ export interface InstallSummary {
   /** The interpreter the hook was pointed at, reported so a user can verify it. */
   nodeBin: string;
   cliEntry: string;
+  hookLauncher?: string;
   dryRun: boolean;
 }
 
@@ -48,15 +50,21 @@ export function buildInstallContext(options: {
   env?: Readonly<Record<string, string | undefined>>;
   cliEntry: string;
   nodeBin?: string;
+  hookLauncher?: string;
   stamp?: string;
   dryRun?: boolean;
 }): InstallContext {
   const env = options.env ?? process.env;
+  const hookLauncher = options.hookLauncher ?? env["SKILLFUL_HOOK_LAUNCHER"]?.trim();
+  if (hookLauncher !== undefined && hookLauncher.length > 0 && !path.isAbsolute(hookLauncher)) {
+    throw new Error("SKILLFUL_HOOK_LAUNCHER must be an absolute path");
+  }
   return {
     homeDir: options.homeDir,
     env,
     cliEntry: options.cliEntry,
     nodeBin: options.nodeBin ?? process.execPath,
+    ...(hookLauncher === undefined || hookLauncher.length === 0 ? {} : { hookLauncher }),
     stamp: options.stamp ?? new Date().toISOString().replace(/[:.]/g, "-"),
     ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
   };
@@ -113,6 +121,7 @@ export function installHooks(ctx: InstallContext, only?: readonly CatalogRuntime
     missing: only === undefined ? missing : missing.filter((runtime) => only.includes(runtime)),
     nodeBin: ctx.nodeBin,
     cliEntry: ctx.cliEntry,
+    ...(ctx.hookLauncher === undefined ? {} : { hookLauncher: ctx.hookLauncher }),
     dryRun: ctx.dryRun === true,
   };
 }

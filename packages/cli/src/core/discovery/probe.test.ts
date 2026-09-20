@@ -190,7 +190,11 @@ describe("probeCliHelp", () => {
         );
         chmodSync(script, 0o700);
 
-        await expect(spawnBounded(script, [pidFile], root, 500, 16_384)).rejects.toThrow(
+        // Thirty isolated Vitest workers can delay the shell's first timeslice on a busy
+        // machine. Give it enough time to publish the descendant PID before testing the
+        // timeout kill itself; 500ms made this safety test intermittently fail before the
+        // process tree existed.
+        await expect(spawnBounded(script, [pidFile], root, 2_000, 16_384)).rejects.toThrow(
           "timed out",
         );
         const childPid = Number(readFileSync(pidFile, "utf8").trim());

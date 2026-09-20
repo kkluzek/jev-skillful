@@ -19,6 +19,7 @@
 
 import type { Catalog, CatalogEntry, CatalogRuntime } from "../catalog/types.js";
 import { type ResolvedConfig, resolveConfig } from "../config/resolve.js";
+import { resolveJevTarget } from "../jev/client.js";
 import { type RouteResult, route } from "../router/route.js";
 import { eventsPath, type PathContext } from "../telemetry/paths.js";
 import { buildRouteEvent, isTelemetryDisabled, writeEvent } from "../telemetry/writer.js";
@@ -159,15 +160,21 @@ export async function runHook(input: HookInput, deps: HookDeps): Promise<HookOut
     const resolved = resolveConfig({ env: deps.env, homeDir: deps.homeDir });
     const { config } = resolved;
 
-    // A missing key is the expected state for a user who has not set one up, so it degrades
-    // quietly instead of erroring. The reminder text tells them what to run.
-    const apiKey = deps.env["TYPESAFE_API_KEY"];
-    if (apiKey === undefined || apiKey.trim().length === 0) {
+    // Provider selection and credential lookup happen before the relatively expensive scan.
+    // Explicit provider mistakes fail closed rather than silently charging another provider.
+    try {
+      resolveJevTarget({
+        provider: config.provider,
+        env: deps.env,
+        baseUrl: config.baseUrl,
+        model: config.model,
+      });
+    } catch (error) {
       return {
         payload: injectionPayload(event, DEGRADED_REMINDER),
         cacheHit: false,
         degraded: true,
-        reason: "no API key",
+        reason: (error as Error).message,
         elapsedMs: now() - startedAt,
       };
     }
@@ -186,7 +193,15 @@ export async function runHook(input: HookInput, deps: HookDeps): Promise<HookOut
     }
 
     const cachePath = deps.cachePath ?? defaultCachePath(deps.homeDir);
-    const key = routeCacheKey(prompt, catalog.fingerprint);
+    const routeContext = JSON.stringify({
+      provider: config.provider,
+      model: config.model,
+      baseUrl: config.baseUrl,
+      uploadPrompt: config.uploadPrompt,
+      thresholds: config.thresholds,
+      quotaGroups: config.quotaGroups,
+    });
+    const key = routeCacheKey(prompt, catalog.fingerprint, routeContext);
     const promptHash = key.slice(0, 32);
 
     // Cache first: a hit costs a file read instead of a round trip, which is the difference
@@ -210,9 +225,11 @@ export async function runHook(input: HookInput, deps: HookDeps): Promise<HookOut
       entries: catalog.entries,
       thresholds: config.thresholds,
       quotaGroups: config.quotaGroups,
+      provider: config.provider,
       model: config.model,
       baseUrl: config.baseUrl,
       uploadPrompt: config.uploadPrompt,
+      jev: { env: deps.env },
     });
 
     // Only resolved decisions are cached. Caching a degraded result would turn a momentary

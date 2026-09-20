@@ -11,9 +11,13 @@
  */
 
 import type { CatalogEntry, CatalogKind, CatalogRuntime } from "../catalog/types.js";
-import { callSystemOne, type JevClientOptions, JevError } from "../jev/client.js";
 import {
-  DEFAULT_MODEL,
+  callSystemOne,
+  type JevClientOptions,
+  JevError,
+  resolveJevDefaults,
+} from "../jev/client.js";
+import {
   isChoiceAnswer,
   isNoulAnswer,
   type SystemOneResponse,
@@ -100,6 +104,8 @@ export interface RouteResult {
   tokensOut?: number;
   cacheHit: boolean;
   promptChars: number;
+  /** Selected billing/API route. */
+  provider: string;
   model: string;
 }
 
@@ -108,6 +114,8 @@ export interface RouteOptions {
   entries: readonly CatalogEntry[];
   thresholds?: Partial<RouteThresholds>;
   quotaGroups?: readonly QuotaGroup[];
+  /** Explicit provider route. Unknown values fail closed in the Jev client. */
+  provider?: string;
   model?: string;
   /**
    * Override the API base URL.
@@ -156,7 +164,11 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
   const thresholds: RouteThresholds = { ...DEFAULT_THRESHOLDS, ...options.thresholds };
   const now = options.now ?? Date.now;
   const startedAt = now();
-  const model = options.model ?? DEFAULT_MODEL;
+  const providerDefaults = resolveJevDefaults(
+    options.jev?.env,
+    options.provider ?? options.jev?.provider,
+  );
+  const model = options.model ?? options.jev?.model ?? providerDefaults.model;
   const promptChars = prompt.length;
 
   const shortlist: string[] = [];
@@ -172,6 +184,7 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
       latencyMs: now() - startedAt,
       cacheHit: false,
       promptChars,
+      provider: providerDefaults.provider,
       model,
       ...extra,
     };
@@ -229,7 +242,9 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
       { state: request.state, model, questions: request.questions },
       {
         ...options.jev,
+        provider: options.provider ?? options.jev?.provider ?? providerDefaults.provider,
         ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+        model,
         requestTimeoutMs: Math.min(thresholds.requestTimeoutMs, budgetLeft),
         signal: controller.signal,
       },

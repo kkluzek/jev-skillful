@@ -56,16 +56,20 @@ export function normalisePrompt(prompt: string): string {
 }
 
 /**
- * Cache key: the normalised prompt plus the catalog fingerprint.
+ * Cache key: the normalised prompt, catalog fingerprint and non-secret route context.
  *
  * The fingerprint is part of the key so that installing a skill, removing an MCP server, or
  * editing a description invalidates every entry that was routed against the old catalog.
  * Without it, the cache would happily serve decisions made against a catalog that no longer
  * exists.
  */
-export function routeCacheKey(prompt: string, catalogFingerprint: string): string {
+export function routeCacheKey(
+  prompt: string,
+  catalogFingerprint: string,
+  routeContext = "",
+): string {
   return createHash("sha256")
-    .update(`${normalisePrompt(prompt)}|${catalogFingerprint}`)
+    .update(`${normalisePrompt(prompt)}|${catalogFingerprint}|${routeContext}`)
     .digest("hex");
 }
 

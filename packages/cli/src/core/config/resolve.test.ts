@@ -34,6 +34,7 @@ describe("resolveConfig", () => {
   it("uses defaults when nothing is configured anywhere", () => {
     const resolved = withoutFile();
 
+    expect(resolved.config.provider).toBe("typesafe");
     expect(resolved.config.model).toBe("jev-latest");
     expect(resolved.config.thresholds).toEqual(DEFAULT_THRESHOLDS);
     expect(resolved.config.quotaGroups).toEqual(DEFAULT_QUOTA_GROUPS);
@@ -112,6 +113,31 @@ describe("resolveConfig", () => {
     expect(withoutFile({ env: { SKILLFUL_MODEL: "from-env" } }).config.model).toBe("from-env");
     expect(withFile({ model: "from-file" }).config.model).toBe("from-file");
     expect(withFile({ model: "from-file" }, { cli: { model: "from-cli" } }).config.model).toBe("from-cli");
+  });
+
+  it("uses provider-specific endpoint and model defaults", () => {
+    const vercel = withoutFile({
+      env: { SKILLFUL_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "v" },
+    });
+    expect(vercel.config).toMatchObject({
+      provider: "vercel",
+      model: "typesafe-ai/jev",
+      baseUrl: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+    });
+
+    const openrouter = withoutFile({ env: { OPENROUTER_API_KEY: "o" } });
+    expect(openrouter.config).toMatchObject({
+      provider: "openrouter",
+      model: "~typesafe/jev-latest",
+      baseUrl: "https://openrouter.ai/api/alpha/decisions",
+    });
+  });
+
+  it("keeps an unknown explicit provider so the client fails closed", () => {
+    const resolved = withoutFile({ env: { SKILLFUL_PROVIDER: "other" } });
+
+    expect(resolved.config.provider).toBe("other");
+    expect(resolved.warnings.join(" ")).toContain("Unknown SKILLFUL_PROVIDER");
   });
 
   it("resolves a boolean setting from an environment string", () => {

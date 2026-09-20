@@ -2,7 +2,7 @@ import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import { resolveConfig } from "../config/resolve.js";
 import { isDisabled } from "../hooks/runner.js";
-import { callSystemOne } from "../jev/client.js";
+import { callSystemOne, resolveJevTarget } from "../jev/client.js";
 import { isNoulAnswer, type SystemOneResponse } from "../jev/types.js";
 import { buildReminderCorpus } from "./corpus.js";
 import { rankReminderDocuments } from "./rank.js";
@@ -187,8 +187,16 @@ export async function selectReminders(
     });
     return { text, ids: [], degraded: true, reason: "prompt upload disabled" };
   }
-  if ((options.env["TYPESAFE_API_KEY"] ?? "").trim().length === 0) {
-    const text = failureMessage("TYPESAFE_API_KEY is unavailable");
+  try {
+    resolveJevTarget({
+      provider: resolved.config.provider,
+      env: options.env,
+      baseUrl: resolved.config.baseUrl,
+      model: resolved.config.model,
+    });
+  } catch (error) {
+    const reason = (error as Error).message;
+    const text = failureMessage(reason);
     appendReminderDecision(decisionPath, {
       at: new Date().toISOString(),
       query,
@@ -196,7 +204,7 @@ export async function selectReminders(
       shown: [],
       degraded: "no-api-key",
     });
-    return { text, ids: [], degraded: true, reason: "no API key" };
+    return { text, ids: [], degraded: true, reason };
   }
 
   try {
@@ -286,8 +294,10 @@ export async function selectReminders(
           ),
         },
         {
+          provider: resolved.config.provider,
           env: options.env,
           baseUrl: resolved.config.baseUrl,
+          model: resolved.config.model,
           requestTimeoutMs: Math.max(100, budgetMs - (now() - startedAt)),
           maxRetries: 0,
           signal: controller.signal,
@@ -304,7 +314,7 @@ export async function selectReminders(
         answer.noul < 0 ||
         answer.noul > 1
       ) {
-        throw new Error(`TypeSafe response is missing a valid candidate_${index} noul answer`);
+        throw new Error(`Jev response is missing a valid candidate_${index} noul answer`);
       }
     }
     const accepted = ranked

@@ -15,6 +15,8 @@ import { rankReminderDocuments } from "./rank.js";
 import { runReminderHook, selectReminders } from "./runner.js";
 import { loadCachedReminderCorpus, reminderIndexCachePath } from "./storage.js";
 import { foldReminderText, tokenizeReminderText } from "./tokenize.js";
+import type { JevClientOptions } from "../jev/client.js";
+import type { SystemOneRequest } from "../jev/types.js";
 import type { ReminderDocument } from "./types.js";
 
 function temporary(): string {
@@ -195,6 +197,45 @@ describe("reminder retrieval", () => {
     expect(result.reason).toBe("prompt upload disabled");
     expect(buildCorpus).not.toHaveBeenCalled();
     expect(call).not.toHaveBeenCalled();
+  });
+
+  it("uses Vercel provider defaults for reminder ranking", async () => {
+    const root = temporary();
+    const call = vi.fn(
+      async (_request: SystemOneRequest, _options?: JevClientOptions) => ({
+        model: "typesafe-ai/jev",
+        answers: { candidate_0: { type: "noul" as const, noul: 0.99 } },
+      }),
+    );
+
+    const selected = await selectReminders("release assets", {
+      homeDir: root,
+      cwd: root,
+      env: {
+        HOME: root,
+        SKILLFUL_PROVIDER: "vercel",
+        AI_GATEWAY_API_KEY: "vercel-key",
+        XDG_STATE_HOME: path.join(root, "state"),
+        XDG_CACHE_HOME: path.join(root, "cache"),
+      },
+      buildCorpus: async () => ({
+        documents: [document()],
+        warnings: [],
+        fingerprint: "vercel",
+        sources: [],
+      }),
+      call: call as typeof import("../jev/client.js").callSystemOne,
+    });
+
+    expect(selected.degraded).toBe(false);
+    expect(call).toHaveBeenCalledOnce();
+    expect(call.mock.calls[0]?.[0].model).toBe("typesafe-ai/jev");
+    expect(call.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        provider: "vercel",
+        baseUrl: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+      }),
+    );
   });
 
   it("distinguishes an empty index and an upstream failure from no relevant reminder", async () => {

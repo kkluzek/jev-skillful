@@ -1,15 +1,17 @@
 # Install
 
 Skillful installs a hook into each agent runtime it finds on your machine. After that, every
-prompt you type gets one TypeSafe request that decides whether a capability you already have
-installed is relevant, and injects at most one primary suggestion plus two runner-ups.
+prompt you type gets one Jev request through the selected provider that decides whether a
+capability you already have installed is relevant, and injects at most one primary suggestion
+plus two runner-ups.
 
 ## Requirements
 
 - Node 20 or newer.
-- A `TYPESAFE_API_KEY` from [typesafe.ai](https://typesafe.ai). Skillful reads it **only** from
-  the environment. It never writes it to a config file, a cache, or a log, and a config file that
-  tries to set one is rejected with a warning.
+- One provider credential: `TYPESAFE_API_KEY`, `AI_GATEWAY_API_KEY`, or
+  `OPENROUTER_API_KEY`. Skillful reads credentials **only** from the environment. It never writes
+  one to a config file, cache, or log, and a config file that tries to set one is rejected with a
+  warning.
 
 ## Install the hook
 
@@ -33,6 +35,34 @@ skillful install --runtime codex --runtime claude-code --json
 The global package remains a symlink to this checkout rather than a copied npm release. After
 editing TypeScript, run `pnpm build`; the globally available `skillful` command will then use the
 new build.
+
+### Vercel AI Gateway from macOS Keychain
+
+The Vercel route uses the TypeSafe-compatible endpoint
+`https://ai-gateway.vercel.sh/typesafe/v1/systemone`, model `typesafe-ai/jev`, and
+`AI_GATEWAY_API_KEY`. To force that route in an ordinary shell:
+
+```bash
+export SKILLFUL_PROVIDER=vercel
+export AI_GATEWAY_API_KEY=your-key
+```
+
+For Claude Code and Codex on macOS, this fork provides an isolated Keychain launcher. Its default
+service/account intentionally match the `typesafe-mcp` fork, so the existing dedicated key can be
+shared without copying it into either client's JSON/TOML configuration:
+
+```bash
+# Only needed if the dedicated key is not already present:
+scripts/store-skillful-vercel-key-macos
+
+# Symlink the editable launcher and reinstall Claude/Codex hooks through it:
+scripts/install-skillful-vercel-macos
+```
+
+The launcher reads Keychain only for commands that make Jev decisions, unsets inherited TypeSafe
+and OpenRouter keys, and exports `SKILLFUL_PROVIDER=vercel`. Discovery refreshes do not need the
+key. `skillful install` records the launcher's absolute path via `SKILLFUL_HOOK_LAUNCHER`, so a
+hook never depends on shell `PATH` or stores the credential.
 
 The command detects which runtimes are present and installs for each. Only the runtimes whose
 configuration directory exists are touched:
@@ -147,7 +177,6 @@ Optional. Skillful works with defaults and no config file.
 
 ```json
 {
-  "model": "jev-latest",
   "thresholds": {
     "noneThreshold": 0.4,
     "minWinnerProbability": 0.25
@@ -156,9 +185,13 @@ Optional. Skillful works with defaults and no config file.
 ```
 
 Environment variables override the file, and CLI flags override both. The full set is listed in
-`skillful --help`. Two in particular:
+`skillful --help`. Provider selection is environment-only:
 
-- `TYPESAFE_API_KEY` — required. Environment only.
+- `SKILLFUL_PROVIDER=typesafe|vercel|openrouter` — explicit billing route. Without it the
+  non-empty-key order is TypeSafe, Vercel, then OpenRouter.
+- `TYPESAFE_API_KEY`, `AI_GATEWAY_API_KEY`, `OPENROUTER_API_KEY` — provider credentials.
+  Environment only.
+- `SKILLFUL_MODEL` and `SKILLFUL_BASE_URL` — override the selected provider's defaults.
 - `SKILLFUL_DISABLE=1` — turn the hook off completely, with no other effect.
 
 Reminder tuning is environment-only: `SKILLFUL_REMINDER_THRESHOLD` (default `0.72`),
@@ -182,7 +215,7 @@ agent session does not fill with noise; doctor tells you the truth when you ask 
 
 ## Privacy
 
-- The prompt text is sent to `api.typesafe.ai` as part of the routing request.
+- The prompt text is sent to the selected Jev provider endpoint as part of the routing request.
 - Session refresh is runtime-specific. Codex uses an ephemeral App Server thread for the current
   project. Claude Code reports its own effective init inventory, including managed connectors and
   OAuth-backed tools; hooks are disabled and the probe is stopped at init, before model inference.
@@ -233,7 +266,7 @@ Common outcomes:
 | Symptom | Cause |
 |---|---|
 | `No Skillful hook` for a runtime | Run `skillful install`. The runtime's config directory must exist. |
-| Injects the reminder line every time | `TYPESAFE_API_KEY` is missing or rejected. |
+| Injects the reminder line every time | The selected provider key is missing or rejected. Run `skillful doctor`. |
 | `Catalog: 0 entries` | No skills, MCP servers or agents found. Install some, or check for a custom home directory. |
 | Hook never fires in Codex | The trust ledger. See the Codex caveat above. |
 | Nothing injected for a prompt that should match | Either the prompt genuinely needed no capability, or the capability did not make the shortlist. Run `skillful route --prompt "..." --explain` to see the shortlist and the scores. |

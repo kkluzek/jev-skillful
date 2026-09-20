@@ -82,7 +82,9 @@ function makeLiveCaller(recordingFetch?: typeof fetch): RouteCaller {
       entries: options.entries,
       thresholds: options.thresholds,
       quotaGroups: options.quotaGroups,
+      provider: options.provider,
       model: options.model,
+      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
       uploadPrompt: options.uploadPrompt,
       ...(recordingFetch === undefined ? {} : { jev: { fetchImpl: recordingFetch } }),
     });
@@ -95,7 +97,9 @@ function makeReplayCaller(replayFetch: typeof fetch): RouteCaller {
       entries: options.entries,
       thresholds: options.thresholds,
       quotaGroups: options.quotaGroups,
+      provider: options.provider,
       model: options.model,
+      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
       uploadPrompt: options.uploadPrompt,
       jev: {
         apiKey: "replay",
@@ -159,6 +163,7 @@ export async function evalCommand(options: EvalCommandOptions): Promise<number> 
   const config = {
     thresholds: resolved.config.thresholds,
     quotaGroups: resolved.config.quotaGroups,
+    provider: resolved.config.provider,
     model: resolved.config.model,
     baseUrl: resolved.config.baseUrl,
     uploadPrompt: resolved.config.uploadPrompt,

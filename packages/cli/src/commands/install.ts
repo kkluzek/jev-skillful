@@ -54,12 +54,18 @@ function describeAction(action: string): string {
 export async function installCommand(options: InstallCommandOptions = {}): Promise<number> {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? env["HOME"] ?? ".";
-  const ctx = buildInstallContext({
-    homeDir,
-    env,
-    cliEntry: options.cliEntry ?? resolveCliEntry(),
-    dryRun: options.dryRun === true,
-  });
+  let ctx: ReturnType<typeof buildInstallContext>;
+  try {
+    ctx = buildInstallContext({
+      homeDir,
+      env,
+      cliEntry: options.cliEntry ?? resolveCliEntry(),
+      dryRun: options.dryRun === true,
+    });
+  } catch (error) {
+    process.stderr.write(`Skillful hook install: ${(error as Error).message}\n`);
+    return 1;
+  }
 
   const summary = installHooks(ctx, options.runtimes);
 
@@ -72,6 +78,7 @@ export async function installCommand(options: InstallCommandOptions = {}): Promi
   out.push(summary.dryRun ? "Skillful hook install (dry run)" : "Skillful hook install");
   out.push(`  interpreter: ${summary.nodeBin}`);
   out.push(`  entry:       ${summary.cliEntry}`);
+  if (summary.hookLauncher !== undefined) out.push(`  launcher:    ${summary.hookLauncher}`);
   out.push("");
 
   if (summary.outcomes.length === 0) {
@@ -105,12 +112,18 @@ export async function installCommand(options: InstallCommandOptions = {}): Promi
 export async function uninstallCommand(options: InstallCommandOptions = {}): Promise<number> {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? env["HOME"] ?? ".";
-  const ctx = buildInstallContext({
-    homeDir,
-    env,
-    cliEntry: options.cliEntry ?? resolveCliEntry(),
-    dryRun: options.dryRun === true,
-  });
+  let ctx: ReturnType<typeof buildInstallContext>;
+  try {
+    ctx = buildInstallContext({
+      homeDir,
+      env,
+      cliEntry: options.cliEntry ?? resolveCliEntry(),
+      dryRun: options.dryRun === true,
+    });
+  } catch (error) {
+    process.stderr.write(`Skillful hook uninstall: ${(error as Error).message}\n`);
+    return 1;
+  }
 
   const summary = uninstallHooks(ctx, options.runtimes);
 

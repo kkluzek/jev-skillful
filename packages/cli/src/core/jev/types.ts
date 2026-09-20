@@ -1,5 +1,5 @@
 /**
- * Wire types for the TypeSafe System One endpoint.
+ * Wire types shared by the TypeSafe-compatible Jev endpoints.
  *
  * These mirror the published request and response shapes exactly. The distinction that
  * matters most for routing is that `noul` returns a bare probability with **no separate
@@ -52,13 +52,61 @@ export interface SystemOneResponse {
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
-/** Default model alias. Verified against the live API. */
-export const DEFAULT_MODEL = "jev-latest";
+export type JevProvider = "typesafe" | "vercel" | "openrouter";
 
-export const DEFAULT_BASE_URL = "https://api.typesafe.ai/v1/systemone";
+export interface JevProviderDefinition {
+  apiKeyEnv: "TYPESAFE_API_KEY" | "AI_GATEWAY_API_KEY" | "OPENROUTER_API_KEY";
+  baseUrl: string;
+  model: string;
+}
 
-/** Environment variable read for the API key. Never accepted as a CLI flag. */
-export const API_KEY_ENV = "TYPESAFE_API_KEY";
+/** Explicit provider selector. Credentials remain environment-only. */
+export const PROVIDER_ENV = "SKILLFUL_PROVIDER";
+
+/**
+ * Provider routes mirrored from the evaluate/typesafe-mcp connector.
+ *
+ * Vercel exposes a TypeSafe-compatible System One endpoint, not its ordinary
+ * OpenAI-compatible endpoint. OpenRouter's Decisions API is still alpha.
+ */
+export const JEV_PROVIDERS: Readonly<Record<JevProvider, JevProviderDefinition>> = {
+  typesafe: {
+    apiKeyEnv: "TYPESAFE_API_KEY",
+    baseUrl: "https://api.typesafe.ai/v1/systemone",
+    model: "jev-latest",
+  },
+  vercel: {
+    apiKeyEnv: "AI_GATEWAY_API_KEY",
+    baseUrl: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+    model: "typesafe-ai/jev",
+  },
+  openrouter: {
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/alpha/decisions",
+    model: "~typesafe/jev-latest",
+  },
+};
+
+export const JEV_PROVIDER_ORDER: readonly JevProvider[] = ["typesafe", "vercel", "openrouter"];
+
+/** Backward-compatible TypeSafe defaults. Provider-aware callers use `JEV_PROVIDERS`. */
+export const DEFAULT_MODEL = JEV_PROVIDERS.typesafe.model;
+export const DEFAULT_BASE_URL = JEV_PROVIDERS.typesafe.baseUrl;
+export const API_KEY_ENV = JEV_PROVIDERS.typesafe.apiKeyEnv;
+
+export function isJevProvider(value: string): value is JevProvider {
+  return value === "typesafe" || value === "vercel" || value === "openrouter";
+}
+
+/** Pick the first configured provider without ever returning a credential. */
+export function autoJevProvider(
+  env: Readonly<Record<string, string | undefined>>,
+): JevProvider | undefined {
+  return JEV_PROVIDER_ORDER.find((provider) => {
+    const value = env[JEV_PROVIDERS[provider].apiKeyEnv];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
 
 export function isNoulAnswer(answer: Answer | undefined): answer is NoulAnswer {
   return answer !== undefined && answer.type === "noul";

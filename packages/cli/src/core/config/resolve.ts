@@ -10,11 +10,14 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { DEFAULT_BASE_URL, DEFAULT_MODEL } from "../jev/types.js";
+import { resolveJevDefaults } from "../jev/client.js";
+import { autoJevProvider, PROVIDER_ENV } from "../jev/types.js";
 import { DEFAULT_QUOTA_GROUPS, type QuotaGroup } from "../retrieval/shortlist.js";
 import { DEFAULT_THRESHOLDS, type RouteThresholds } from "../router/thresholds.js";
 
 export interface SkillfulConfig {
+  /** Billing/API route. Kept as a string so an unknown explicit value fails closed downstream. */
+  provider: string;
   model: string;
   baseUrl: string;
   thresholds: RouteThresholds;
@@ -36,7 +39,16 @@ export interface ResolvedConfig {
 }
 
 /** Keys that must never be read from a config file. */
-const FORBIDDEN_FILE_KEYS = ["apiKey", "api_key", "typesafeApiKey", "TYPESAFE_API_KEY", "key", "token"];
+const FORBIDDEN_FILE_KEYS = [
+  "apiKey",
+  "api_key",
+  "typesafeApiKey",
+  "TYPESAFE_API_KEY",
+  "AI_GATEWAY_API_KEY",
+  "OPENROUTER_API_KEY",
+  "key",
+  "token",
+];
 
 /** Environment variable per setting. */
 const ENV_KEYS = {
@@ -130,6 +142,15 @@ export function resolveConfig(input: ResolveConfigInput = {}): ResolvedConfig {
   const configPath = input.configPath ?? defaultConfigPath(homeDir);
   const warnings: string[] = [];
   const sources: Record<string, ConfigSource> = {};
+  const providerDefaults = resolveJevDefaults(env);
+  const provider = providerDefaults.provider;
+  sources["provider"] =
+    env[PROVIDER_ENV] === undefined && autoJevProvider(env) === undefined ? "default" : "env";
+  if (env[PROVIDER_ENV] !== undefined && provider !== "typesafe" && provider !== "vercel" && provider !== "openrouter") {
+    warnings.push(
+      `Unknown ${PROVIDER_ENV}=${JSON.stringify(provider)}; expected typesafe, vercel, or openrouter. Routing will fail closed.`,
+    );
+  }
 
   const readFile = input.readFile ?? ((filePath: string) => readFileSync(filePath, "utf8"));
 
@@ -201,7 +222,7 @@ export function resolveConfig(input: ResolveConfigInput = {}): ResolvedConfig {
     input.cli?.model ??
     env[ENV_KEYS.model]?.trim() ??
     (typeof file.model === "string" ? file.model : undefined) ??
-    DEFAULT_MODEL;
+    providerDefaults.model;
   sources["model"] = input.cli?.model !== undefined
     ? "cli"
     : env[ENV_KEYS.model] !== undefined
@@ -214,7 +235,7 @@ export function resolveConfig(input: ResolveConfigInput = {}): ResolvedConfig {
     input.cli?.baseUrl ??
     env[ENV_KEYS.baseUrl]?.trim() ??
     (typeof file.baseUrl === "string" ? file.baseUrl : undefined) ??
-    DEFAULT_BASE_URL;
+    providerDefaults.baseUrl;
   sources["baseUrl"] = input.cli?.baseUrl !== undefined
     ? "cli"
     : env[ENV_KEYS.baseUrl] !== undefined
@@ -253,7 +274,7 @@ export function resolveConfig(input: ResolveConfigInput = {}): ResolvedConfig {
   }
 
   return {
-    config: { model, baseUrl, thresholds, quotaGroups, uploadPrompt },
+    config: { provider, model, baseUrl, thresholds, quotaGroups, uploadPrompt },
     sources,
     warnings,
     configPath,

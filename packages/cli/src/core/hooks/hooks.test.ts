@@ -168,6 +168,7 @@ const INJECTED: RouteResult = {
   latencyMs: 10,
   cacheHit: false,
   promptChars: 20,
+  provider: "typesafe",
   model: "jev-latest",
 };
 
@@ -182,6 +183,10 @@ describe("cache", () => {
     expect(routeCacheKey("Fix   The  Bug", "fp")).toBe(routeCacheKey("fix the bug", "fp"));
     // A different catalog must not.
     expect(routeCacheKey("fix the bug", "fp")).not.toBe(routeCacheKey("fix the bug", "fp2"));
+    // Switching provider/model must not serve a decision billed and made elsewhere.
+    expect(routeCacheKey("fix the bug", "fp", "typesafe|jev-latest")).not.toBe(
+      routeCacheKey("fix the bug", "fp", "vercel|typesafe-ai/jev"),
+    );
     expect(normalisePrompt("  A \n B  ")).toBe("a b");
   });
 
@@ -437,6 +442,44 @@ describe("installers", () => {
       JSON.parse(readFileSync(path.join(configDir, "settings.json"), "utf8")).hooks.SessionStart,
     ).toHaveLength(2);
     expect(fsExists(path.join(home, ".claude", "settings.json"))).toBe(false);
+  });
+
+  it("can pin hooks and generated extensions to an absolute credential launcher", () => {
+    const home = makeHome();
+    mkdirSync(path.join(home, ".claude"), { recursive: true });
+    mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+    const launcher = path.join(home, ".local", "bin", "skillful-vercel");
+    const ctx = buildInstallContext({
+      homeDir: home,
+      env: { HOME: home, SKILLFUL_HOOK_LAUNCHER: launcher },
+      cliEntry: "/opt/skillful/dist/bin.js",
+      nodeBin: "/usr/bin/node",
+      stamp: "20260101-000000",
+    });
+
+    const summary = installHooks(ctx, ["claude-code", "pi"]);
+    expect(summary.hookLauncher).toBe(launcher);
+    const settings = JSON.parse(readFileSync(path.join(home, ".claude", "settings.json"), "utf8"));
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].command.startsWith(`"${launcher}" hook`)).toBe(
+      true,
+    );
+    const extension = readFileSync(
+      path.join(home, ".pi", "agent", "extensions", "skillful", "index.ts"),
+      "utf8",
+    );
+    expect(extension).toContain(`const EXECUTABLE = ${JSON.stringify(launcher)}`);
+    expect(extension).toContain("const ARGUMENT_PREFIX = []");
+    expect(extension).not.toContain("/opt/skillful/dist/bin.js");
+  });
+
+  it("rejects a relative hook launcher instead of writing cwd-dependent commands", () => {
+    expect(() =>
+      buildInstallContext({
+        homeDir: "/home/test",
+        env: { SKILLFUL_HOOK_LAUNCHER: "./skillful-vercel" },
+        cliEntry: "/opt/skillful/dist/bin.js",
+      }),
+    ).toThrow("absolute path");
   });
 
   it("leaves another tool's hooks untouched and removes only its own on uninstall", () => {
@@ -698,6 +741,33 @@ describe("runner", () => {
     expect(outcome.degraded).toBe(true);
     expect(outcome.payload.hookSpecificOutput?.additionalContext).toContain(
       "npx @mrgoonie/skillful",
+    );
+  });
+
+  it("accepts an explicitly selected Vercel provider without a TypeSafe key", async () => {
+    const home = makeHome();
+    let routeOptions: Record<string, unknown> | undefined;
+    const routeFn = (async (_prompt: string, options: Record<string, unknown>) => {
+      routeOptions = options;
+      return INJECTED;
+    }) as unknown as typeof import("../router/route.js").route;
+
+    const outcome = await runHook(
+      { prompt: "refactor the auth middleware" },
+      deps(
+        home,
+        { SKILLFUL_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "v" },
+        routeFn,
+      ),
+    );
+
+    expect(outcome.degraded).toBe(false);
+    expect(routeOptions).toEqual(
+      expect.objectContaining({
+        provider: "vercel",
+        model: "typesafe-ai/jev",
+        baseUrl: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+      }),
     );
   });
 

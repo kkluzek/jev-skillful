@@ -27,9 +27,11 @@ Code and Codex hooks are plain command hooks and do not carry the same weight.
 
 ### Your prompt is transmitted
 
-`skillful route` sends the prompt to `api.typesafe.ai`, truncated to 1000 characters. This is the
-mechanism of the product: the model decides which capability a task needs, and it needs to read the
-task. The request carries the shortlisted capability names and descriptions alongside the prompt.
+`skillful route` sends the prompt to the selected Jev provider, truncated to 1000 characters. The
+supported routes are TypeSafe, Vercel AI Gateway's TypeSafe-compatible endpoint, and OpenRouter's
+Decisions endpoint. This is the mechanism of the product: the model decides which capability a task
+needs, and it needs to read the task. The request carries the shortlisted capability names and
+descriptions alongside the prompt.
 
 - Set `SKILLFUL_UPLOAD_PROMPT=false` to withhold the prompt text. The shortlist is still chosen
   locally from your prompt, so routing quality drops; nothing else changes.
@@ -46,9 +48,17 @@ task. The request carries the shortlisted capability names and descriptions alon
   no-network, write-restricted macOS sandbox.
 - There is no telemetry, analytics, phone-home, or update check.
 
-The API key is read from `TYPESAFE_API_KEY` and nowhere else. A config file that contains a
-credential-shaped key is rejected with a warning, because a key written into a file should be
-treated as leaked.
+Provider keys are read from `TYPESAFE_API_KEY`, `AI_GATEWAY_API_KEY`, or
+`OPENROUTER_API_KEY` and nowhere else in the application. `SKILLFUL_PROVIDER` explicitly selects a
+route; a missing key then fails closed instead of falling through to another billing provider. A
+config file that contains a credential-shaped key is rejected with a warning, because a key written
+into a file should be treated as leaked.
+
+The optional macOS `skillful-vercel` launcher is a separate, readable shell boundary. It reads one
+dedicated Vercel key from Keychain at process start, removes inherited TypeSafe/OpenRouter keys,
+exports the Vercel provider and key only to its Skillful child, then replaces itself with that
+process. `skillful install` records the launcher's absolute path; it never copies the key into an
+agent configuration file.
 
 ### Configuration files
 
@@ -73,8 +83,10 @@ without asking you. If the hook does not fire in Codex, approve it once when Cod
 
 ### The route cache
 
-`~/.cache/skillful/routes.json` stores routing decisions, keyed by a hash of the normalised prompt
-and the catalog fingerprint. It is written with mode `0600`.
+`~/.cache/skillful/routes.json` stores routing decisions, keyed by a hash of the normalised prompt,
+catalog fingerprint, and non-secret route context (provider, endpoint, model, thresholds and
+quotas). Changing providers cannot serve a decision made through a previous billing route. The file
+is written with mode `0600`.
 
 - It never stores prompt text.
 - It never stores an API key or any credential.
@@ -118,9 +130,9 @@ A private cache-side marker carries a `PostCompact` persistence failure to the n
 `SessionStart`. Delivery is acknowledged only after stdout flushes, preferring a possible duplicate
 after a crash over silent loss.
 
-The bounded query and candidate excerpts are sent to TypeSafe for Jev relevance decisions. Set
-`SKILLFUL_UPLOAD_PROMPT=false` to prevent that transmission; reminder selection then fails open
-with an explicit status instead of falling back to an unauthenticated or local guess.
+The bounded query and candidate excerpts are sent to the selected Jev provider for relevance
+decisions. Set `SKILLFUL_UPLOAD_PROMPT=false` to prevent that transmission; reminder selection then
+fails open with an explicit status instead of falling back to an unauthenticated or local guess.
 
 ## Supported versions
 

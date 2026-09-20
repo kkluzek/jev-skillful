@@ -46,6 +46,8 @@ export interface RouteEvent {
   sessionId: string;
   promptHash: string;
   promptChars: number;
+  /** Billing/API route. Absent only on events written before provider support. */
+  provider?: string;
   catalogFingerprint: string;
   candidateCount: number;
   candidateIds: string[];

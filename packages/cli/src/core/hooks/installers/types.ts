@@ -15,6 +15,8 @@ export interface InstallContext {
   cliEntry: string;
   /** Node executable to invoke it with. */
   nodeBin: string;
+  /** Optional absolute launcher that injects provider credentials before invoking Skillful. */
+  hookLauncher?: string;
   /** Timestamp used in backup filenames, so a run produces consistent names. */
   stamp: string;
   /**
@@ -53,17 +55,23 @@ export interface UninstallOutcome {
  * and it is what `json-merge.ts` looks for when deciding which entries are ours.
  */
 export function hookCommand(ctx: InstallContext, runtime: CatalogRuntime): string {
-  return `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)} hook --runtime ${runtime} ${MARKER_ARG}`;
+  return `${commandPrefix(ctx)} hook --runtime ${runtime} ${MARKER_ARG}`;
 }
 
 /** Refresh the runtime-specific MCP inventory and installed CLI index once per session. */
 export function refreshCommand(ctx: InstallContext, runtime: CatalogRuntime): string {
-  return `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)} refresh --runtime ${runtime} --quiet ${MARKER_ARG}`;
+  return `${commandPrefix(ctx)} refresh --runtime ${runtime} --quiet ${MARKER_ARG}`;
 }
 
 /** Run the Claude-only memory and rule reminder layer. */
 export function reminderCommand(ctx: InstallContext): string {
-  return `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)} remind ${MARKER_ARG}`;
+  return `${commandPrefix(ctx)} remind ${MARKER_ARG}`;
+}
+
+function commandPrefix(ctx: InstallContext): string {
+  return ctx.hookLauncher === undefined
+    ? `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)}`
+    : quote(ctx.hookLauncher);
 }
 
 /** Quoted the way both POSIX shells and Windows `cmd` accept. */

@@ -27,8 +27,8 @@ const EXTENSION_TIMEOUT_MS = 2500;
  * containing a quote or a backslash cannot break out of the generated literal.
  */
 export function extensionSource(ctx: InstallContext, runtime: CatalogRuntime): string {
-  const nodeBin = JSON.stringify(ctx.nodeBin);
-  const cliEntry = JSON.stringify(ctx.cliEntry);
+  const executable = JSON.stringify(ctx.hookLauncher ?? ctx.nodeBin);
+  const argumentPrefix = JSON.stringify(ctx.hookLauncher === undefined ? [ctx.cliEntry] : []);
   const runtimeName = JSON.stringify(runtime);
 
   return `/**
@@ -42,8 +42,8 @@ export function extensionSource(ctx: InstallContext, runtime: CatalogRuntime): s
 
 import { spawn } from "node:child_process";
 
-const NODE_BIN = ${nodeBin};
-const CLI_ENTRY = ${cliEntry};
+const EXECUTABLE = ${executable};
+const ARGUMENT_PREFIX = ${argumentPrefix};
 const RUNTIME = ${runtimeName};
 const MARKER = "--managed-by-skillful";
 const TIMEOUT_MS = ${EXTENSION_TIMEOUT_MS};
@@ -59,7 +59,7 @@ function routeViaCli(payload) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(NODE_BIN, [CLI_ENTRY, "hook", "--runtime", RUNTIME, MARKER], { stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn(EXECUTABLE, [...ARGUMENT_PREFIX, "hook", "--runtime", RUNTIME, MARKER], { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       resolve(null);
       return;

@@ -142,8 +142,8 @@ export interface ContainerRun {
  *
  * The isolation rules are deliberate and they are security-relevant:
  * - No real home directory is mounted, so a hook cannot read or write the user's agent config.
- * - `TYPESAFE_API_KEY` is not passed into the container. Routing is exercised by the arm switch
- *   alone; a container that could call the API would put a credential inside code that a benchmark
+ * - No Jev provider key is passed into the container. Routing is exercised by the arm switch
+ *   alone; a container that could call an API would put a credential inside code that a benchmark
  *   task can modify.
  * - Only the repository directory is mounted.
  */

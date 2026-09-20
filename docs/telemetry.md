@@ -22,7 +22,7 @@ The file is written `0600`.
 Every event is one JSON object on one line. Two kinds exist.
 
 **`route`** — one per routing decision. It carries the prompt's hash and character count, the
-catalog fingerprint, the shortlist, the decision and its reason, the latency, whether the cache was
+catalog fingerprint, selected provider, the shortlist, the decision and its reason, the latency, whether the cache was
 hit, and token counts.
 
 **`capability-used`** — one when an agent actually used a capability. This is a separate event

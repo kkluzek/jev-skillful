@@ -20,7 +20,7 @@ import {
   isDisabled,
   resolveForReport,
 } from "../core/hooks/runner.js";
-import { API_KEY_ENV } from "../core/jev/types.js";
+import { resolveJevTarget, type JevTarget } from "../core/jev/client.js";
 import { route } from "../core/router/route.js";
 
 export interface DoctorCommandOptions {
@@ -67,17 +67,28 @@ export async function doctorCommand(options: DoctorCommandOptions = {}): Promise
       : "Hook is enabled.",
   });
 
-  const apiKey = env[API_KEY_ENV];
-  const hasKey = typeof apiKey === "string" && apiKey.trim().length > 0;
+  const resolved = resolveForReport(env, homeDir);
+  let target: JevTarget | undefined;
+  let providerError: string | undefined;
+  try {
+    target = resolveJevTarget({
+      provider: resolved.config.provider,
+      env,
+      baseUrl: resolved.config.baseUrl,
+      model: resolved.config.model,
+    });
+  } catch (error) {
+    providerError = (error as Error).message;
+  }
+  const hasKey = target !== undefined;
   checks.push({
-    name: "api key",
+    name: "Jev provider",
     status: hasKey ? "ok" : "fail",
-    detail: hasKey
-      ? `${API_KEY_ENV} is set.`
-      : `${API_KEY_ENV} is not set. Routing will degrade to a reminder until it is. Skillful reads the key only from the environment and never writes it to disk.`,
+    detail: target !== undefined
+      ? `${target.provider} selected with ${target.apiKeyEnv}.`
+      : `${providerError ?? "No provider credential found"} Routing will degrade to a reminder until it is fixed. Skillful reads keys only from the environment and never writes them to disk.`,
   });
 
-  const resolved = resolveForReport(env, homeDir);
   for (const warning of resolved.warnings) {
     checks.push({ name: "config", status: "warn", detail: warning });
   }
@@ -144,9 +155,11 @@ export async function doctorCommand(options: DoctorCommandOptions = {}): Promise
       entries: scanned.entries,
       thresholds: resolved.config.thresholds,
       quotaGroups: resolved.config.quotaGroups,
+      provider: resolved.config.provider,
       model: resolved.config.model,
       baseUrl: resolved.config.baseUrl,
       uploadPrompt: resolved.config.uploadPrompt,
+      jev: { env },
     });
     const elapsed = Date.now() - startedAt;
     const text = renderInjection(result);

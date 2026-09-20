@@ -1,5 +1,5 @@
 /**
- * Recording and replaying TypeSafe responses, so the eval gate can run without a key.
+ * Recording and replaying Jev responses, so the eval gate can run without a key.
  *
  * Replay works by substituting a fake `fetch` underneath the real router rather than by
  * reimplementing the routing decision. Everything the metrics measure — the shortlist, the

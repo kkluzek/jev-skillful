@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+if [ "$(uname -s)" != "Darwin" ]; then
+	echo "This installer is for macOS." >&2
+	exit 1
+fi
+
+repo_dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+install_dir=${SKILLFUL_INSTALL_DIR:-"$HOME/.local/bin"}
+source_launcher="$repo_dir/scripts/skillful-vercel"
+installed_launcher="$install_dir/skillful-vercel"
+
+mkdir -p "$install_dir"
+if [ -e "$installed_launcher" ] || [ -L "$installed_launcher" ]; then
+	current_target=$(readlink "$installed_launcher" 2>/dev/null || true)
+	if [ "$current_target" != "$source_launcher" ]; then
+		echo "Refusing to replace existing $installed_launcher" >&2
+		exit 1
+	fi
+else
+	ln -s "$source_launcher" "$installed_launcher"
+fi
+
+echo "Linked $installed_launcher -> $source_launcher"
+"$installed_launcher" install --runtime codex --runtime claude-code

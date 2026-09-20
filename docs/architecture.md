@@ -69,7 +69,7 @@ An entry's id is `runtime:kind:scope:name`. It deliberately excludes the filesys
 skills directory does not change the identity of anything inside it.
 
 The catalog fingerprint is a sha256 over sorted entry identity, retrieval text and typed capability
-identity/availability. It is one half of the route cache key, so it changes when a command tree or
+identity/availability. It is part of the route cache key, so it changes when a command tree or
 tool availability changes while staying stable across incidental file ordering and modification
 times. Paths are excluded except where a hashed effective origin is part of the typed identity.
 
@@ -207,8 +207,8 @@ whole project and never writes those sources. The parser uses the same memory in
 rule-definition patterns as the installed memory-health script.
 
 Weighted BM25 (including Polish folding, identifier/file splitting, citation contexts and a light
-4-gram fallback) produces at most 12 candidates. One batched TypeSafe request asks a separate
-`noul` relevance question for each candidate. At most three passing titles are rendered. Memory
+4-gram fallback) produces at most 12 candidates. One batched request to the selected Jev provider
+asks a separate `noul` relevance question for each candidate. At most three passing titles are rendered. Memory
 and rule bodies help ranking but are never injected. `PostCompact` stores the selection privately;
 the next `SessionStart(source=compact)` injects it because Claude discards `PostCompact` context.
 If persistence fails, a separate private marker carries the diagnostic to that supported event.

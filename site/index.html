@@ -6,7 +6,7 @@
     <title>Skillful — capability router for coding agents</title>
     <meta
       name="description"
-      content="Skillful watches your prompts, decides whether a skill, MCP server or subagent you already have is relevant, and injects at most one suggestion. Bring your own TypeSafe key; no server, no telemetry."
+      content="Skillful watches your prompts, decides whether an installed capability is relevant, and injects at most one suggestion. Use TypeSafe, Vercel AI Gateway, or OpenRouter; no Skillful server or telemetry."
     />
     <link rel="canonical" href="https://skillful.agentkit.best/" />
 
@@ -14,7 +14,7 @@
     <meta property="og:title" content="Skillful — capability router for coding agents" />
     <meta
       property="og:description"
-      content="One suggestion per prompt, chosen from the capabilities you already installed. Bring your own TypeSafe key."
+      content="One suggestion per prompt, chosen from installed capabilities through TypeSafe, Vercel AI Gateway, or OpenRouter."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://skillful.agentkit.best/" />
@@ -170,9 +170,9 @@
       <pre><code>npx @mrgoonie/skillful install</code></pre>
 
       <p>
-        You bring your own <code>TYPESAFE_API_KEY</code>. There is no server, no
-        account, and nothing is collected. The only network call Skillful makes is
-        the routing request to <code>api.typesafe.ai</code>.
+        You bring a TypeSafe, Vercel AI Gateway, or OpenRouter key. There is no
+        Skillful server or account, and nothing is collected. The routing request
+        goes only to the Jev provider you select.
       </p>
 
       <h2>Why this exists</h2>
@@ -195,7 +195,7 @@
       <h2>How it works</h2>
       <p>
         A local scan builds a shortlist of about fifteen candidates with BM25 and
-        per-kind quotas, with no tokens spent. One TypeSafe request then asks a
+        per-kind quotas, with no tokens spent. One Jev provider request then asks a
         single <code>choice</code> question over that shortlist plus
         <code>none</code>. At most one primary suggestion and two runner-ups are
         injected, and a prompt that needs nothing gets nothing.

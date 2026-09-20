@@ -156,11 +156,17 @@ export {
 } from "./hooks/render.js";
 export type { HookDeps, HookInput, HookOutcome, HookPayload } from "./hooks/runner.js";
 export { DISABLE_ENV, injectionPayload, isDisabled, runHook } from "./hooks/runner.js";
-export type { JevClientOptions, JevErrorCode } from "./jev/client.js";
+export type { JevClientOptions, JevErrorCode, JevTarget } from "./jev/client.js";
 // ---------------------------------------------------------------------------
 // Jev client
 // ---------------------------------------------------------------------------
-export { callSystemOne, JevError, resolveApiKey } from "./jev/client.js";
+export {
+  callSystemOne,
+  JevError,
+  resolveApiKey,
+  resolveJevDefaults,
+  resolveJevTarget,
+} from "./jev/client.js";
 export type {
   Answer,
   ChoiceAnswer,
@@ -168,15 +174,22 @@ export type {
   NoulAnswer,
   NoulQuestion,
   Question,
+  JevProvider,
+  JevProviderDefinition,
   SystemOneRequest,
   SystemOneResponse,
 } from "./jev/types.js";
 export {
   API_KEY_ENV,
+  autoJevProvider,
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
+  isJevProvider,
   isChoiceAnswer,
   isNoulAnswer,
+  JEV_PROVIDERS,
+  JEV_PROVIDER_ORDER,
+  PROVIDER_ENV,
 } from "./jev/types.js";
 export type { RedactOptions } from "./redact.js";
 // ---------------------------------------------------------------------------

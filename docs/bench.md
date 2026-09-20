@@ -78,7 +78,8 @@ Both arms reset to the same commit, because otherwise the second arm inherits th
 and the measured effect is an effect of ordering.
 
 The container mounts only the repository. It never mounts a real home directory, so a hook cannot read
-or write your agent configuration, and `TYPESAFE_API_KEY` is never passed into it.
+or write your agent configuration, and no provider credential (`TYPESAFE_API_KEY`,
+`AI_GATEWAY_API_KEY`, or `OPENROUTER_API_KEY`) is ever passed into it.
 
 ## Success is a test verdict, not an opinion
 

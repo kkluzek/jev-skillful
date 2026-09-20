@@ -139,6 +139,7 @@ const ROUTE_RESULT = {
   latencyMs: 742.4,
   cacheHit: false,
   promptChars: 132,
+  provider: "vercel",
   tokensIn: 1360,
   tokensOut: 140,
 };
@@ -226,6 +227,10 @@ describe("writer", () => {
     expect(event.error).toBe("timeout");
     // A degraded event is still recorded: an outage is data, not noise.
     expect(event.primary).toBeNull();
+  });
+
+  it("records the non-secret provider route for billing diagnosis", () => {
+    expect(buildEvent().provider).toBe("vercel");
   });
 
   it("never records prompt text, only a hash and a length", () => {

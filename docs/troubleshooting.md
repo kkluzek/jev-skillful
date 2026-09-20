@@ -14,9 +14,12 @@ see the latency and the decision. Most problems resolve there.
 
 Work down this list.
 
-1. **Is the key set?** `doctor` reports `[FAIL] api key` when `TYPESAFE_API_KEY` is missing or
-   empty. Skillful reads it only from the environment, so exporting it in a different shell than
-   the one your agent runs in has no effect.
+1. **Is the provider ready?** `doctor` reports `[FAIL] Jev provider` when the selected provider's
+   key is missing or empty. `SKILLFUL_PROVIDER=vercel` needs `AI_GATEWAY_API_KEY`; `typesafe`
+   needs `TYPESAFE_API_KEY`; `openrouter` needs `OPENROUTER_API_KEY`. Skillful reads credentials
+   only from the environment, so exporting one in a different shell than the agent runs in has no
+   effect. The macOS Vercel launcher avoids that problem by reading the dedicated key from
+   Keychain inside each decision process.
 
 2. **Is the hook installed?** `doctor` prints one line per runtime. `present, no hook` means run
    `npx @mrgoonie/skillful install`.
@@ -50,6 +53,11 @@ stays silent about the cause on purpose: it must not fill your agent's terminal 
 - `timeout` — the budget ran out. Raise `SKILLFUL_BUDGET_MS`, or lower it deliberately and accept
   more degradation.
 - `config` — the config file is malformed. `doctor` prints each warning.
+
+Provider selection itself is fail-closed. If `SKILLFUL_PROVIDER=vercel` is set but
+`AI_GATEWAY_API_KEY` is absent, Skillful does not fall back to a TypeSafe or OpenRouter key that
+happens to be inherited. Without an explicit provider, the compatibility order is TypeSafe,
+Vercel, then OpenRouter.
 
 A degraded result is never cached, so a transient outage does not freeze the behaviour for the
 cache's lifetime. Recovery is immediate once the cause is fixed.
@@ -124,9 +132,9 @@ these files is safe; the index and session state are rebuilt.
 ## The reminder layer did not run
 
 This is an explicit fail-open status, not a claim that nothing was relevant. Common causes are a
-missing/rejected `TYPESAFE_API_KEY`, `SKILLFUL_UPLOAD_PROMPT=false`, an empty `MEMORY.md` index, or
-the 1800ms reminder budget expiring. Claude continues without a reminder. The decision log above
-records the category without ever recording the key.
+missing/rejected credentials for the selected Jev provider, `SKILLFUL_UPLOAD_PROMPT=false`, an
+empty `MEMORY.md` index, or the 1800ms reminder budget expiring. Claude continues without a
+reminder. The decision log above records the category without ever recording the key.
 
 Reminder selection runs only on Claude resume and compaction, not every prompt. After compaction,
 verify that both Skillful entries remain in `hooks.PostCompact` and `hooks.SessionStart`; reinstall
@@ -134,7 +142,9 @@ is idempotent and preserves unrelated hooks.
 
 If a route seems stale after you installed or removed capabilities, it should not be: the catalog
 fingerprint is part of the cache key, so any change to the catalog invalidates every entry
-immediately. A stale decision that survives a catalog change is a bug.
+immediately. Provider, model, endpoint, thresholds, quotas, and prompt-upload policy are also part
+of the key, so switching the Vercel/TypeSafe/OpenRouter route cannot reuse a prior decision. A stale
+decision that survives either change is a bug.
 
 ## The catalog is empty or too small
 

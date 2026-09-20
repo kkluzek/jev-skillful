@@ -8,7 +8,8 @@ one suggestion into the agent's context.
 npx @mrgoonie/skillful install
 ```
 
-You bring your own `TYPESAFE_API_KEY`. There is no server, no account, and nothing is collected.
+You bring a TypeSafe, Vercel AI Gateway, or OpenRouter key. There is no Skillful server or
+account, and nothing is collected.
 
 ## The problem
 
@@ -28,7 +29,7 @@ two agent runtimes, plus MCP servers, subagents and commands.
 Your prompt
   │
   ├─ Hook (Claude Code / Codex / Pi / OMP)
-  │    cache lookup by prompt hash + catalog fingerprint
+  │    cache lookup by prompt hash + catalog fingerprint + provider/policy context
   │    hit  → inject (<250ms)
   │    miss → route within a 2000ms budget
   │    error or over budget → inject one reminder line, never fail the prompt
@@ -47,7 +48,7 @@ Your prompt
   │    cached tools plus skills, agents and exact slash invocations, normalised
   │    BM25 + per-kind quota → a bounded shortlist
   │
-  ├─ One TypeSafe request
+  ├─ One Jev request (TypeSafe / Vercel AI Gateway / OpenRouter)
   │    a `choice` question over the shortlist plus `none`
   │    per-candidate `noul` questions to rank the runners-up
   │
@@ -63,6 +64,31 @@ retrieval necessary. The cap is one suggestion plus two alternatives.
 **Abstaining is a first-class outcome.** A prompt that does not need a capability gets nothing
 injected. Trivial prompts, questions and chit-chat are handled by the `none` option in the same
 question that picks the capability, rather than by a separate classifier with its own failure mode.
+
+## Jev providers
+
+Skillful can call the same Jev decision API through three billing routes:
+
+| Provider | Key | Endpoint | Default model |
+|---|---|---|---|
+| TypeSafe | `TYPESAFE_API_KEY` | `https://api.typesafe.ai/v1/systemone` | `jev-latest` |
+| Vercel AI Gateway | `AI_GATEWAY_API_KEY` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` |
+| OpenRouter | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/alpha/decisions` | `~typesafe/jev-latest` |
+
+Set `SKILLFUL_PROVIDER=typesafe|vercel|openrouter` to isolate the billing route. Without it,
+Skillful uses the first non-empty key in that table order. An explicit provider with a missing key
+fails closed; it never falls through to another provider. `SKILLFUL_MODEL` and
+`SKILLFUL_BASE_URL` remain explicit overrides.
+
+This fork also includes a macOS Keychain launcher that shares the dedicated Vercel credential used
+by the `typesafe-mcp` fork without writing it to Claude or Codex configuration:
+
+```bash
+scripts/install-skillful-vercel-macos
+```
+
+See [Vercel provider setup](docs/install.md#vercel-ai-gateway-from-macos-keychain) and the
+[editable fork workflow](FORK.md).
 
 ## What is actually measured
 
@@ -145,7 +171,7 @@ npx @mrgoonie/skillful export-case --prompt "..."   # a redacted case to paste i
 
 ## Privacy
 
-- The prompt is sent to `api.typesafe.ai` as part of the routing request.
+- The prompt is sent to the selected Jev provider endpoint as part of the routing request.
 - At session start, Skillful refreshes only the selected runtime. Codex is queried through an
   ephemeral App Server thread. Claude Code first performs a bounded `claude mcp list` health-check,
   then is queried through its own effective `system/init`

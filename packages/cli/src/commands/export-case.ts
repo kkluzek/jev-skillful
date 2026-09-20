@@ -67,9 +67,11 @@ export async function exportCaseCommand(options: ExportCaseOptions = {}): Promis
       entries: scanned.entries,
       thresholds: resolved.config.thresholds,
       quotaGroups: resolved.config.quotaGroups,
+      provider: resolved.config.provider,
       model: resolved.config.model,
       baseUrl: resolved.config.baseUrl,
       uploadPrompt: resolved.config.uploadPrompt,
+      jev: { env },
     });
     shortlist = result.shortlist;
     shortlistDetail = result.shortlistDetail;
@@ -114,6 +116,7 @@ export async function exportCaseCommand(options: ExportCaseOptions = {}): Promis
     shortlistDetail,
     latencyMs: result.latencyMs,
     promptChars: result.promptChars,
+    provider: result.provider,
     model: result.model,
   };
 

@@ -7,7 +7,7 @@
  * the model.
  */
 
-import { API_KEY_ENV, resolveApiKey, resolveConfig, route } from "../core/index.js";
+import { resolveConfig, resolveJevTarget, route } from "../core/index.js";
 import type { DegradedReason, RouteResult, SkipReason } from "../core/index.js";
 import { scanCatalog } from "../core/index.js";
 
@@ -21,12 +21,12 @@ export interface RouteCommandOptions {
 }
 
 const DEGRADED_ADVICE: Record<DegradedReason, string> = {
-  auth: `The API key was rejected. Check that ${API_KEY_ENV} holds a current key.`,
-  config: `No API key found. Export ${API_KEY_ENV} before routing.`,
-  network: "The request never reached TypeSafe. Check connectivity and retry.",
+  auth: "The selected Jev provider rejected its API key.",
+  config: "No valid Jev provider configuration was found. Check SKILLFUL_PROVIDER and its key.",
+  network: "The request never reached the selected Jev provider. Check connectivity and retry.",
   timeout: "Routing exceeded its budget. Raise budgetMs or lower requestTimeoutMs.",
-  upstream: "TypeSafe returned an error. This is usually transient.",
-  malformed: "TypeSafe returned a body this client could not read.",
+  upstream: "The selected Jev provider returned an error. This is usually transient.",
+  malformed: "The selected Jev provider returned a body this client could not read.",
 };
 
 const SKIP_EXPLANATION: Record<SkipReason, string> = {
@@ -63,23 +63,30 @@ export async function routeCommand(options: RouteCommandOptions): Promise<number
   }
 
   const catalog = await scanCatalog({});
-  const apiKey = resolveApiKey({});
+  let providerError: string | undefined;
+  try {
+    resolveJevTarget({
+      provider: resolved.config.provider,
+      baseUrl: resolved.config.baseUrl,
+      model: resolved.config.model,
+    });
+  } catch (error) {
+    providerError = (error as Error).message;
+  }
 
-  // A missing key is reported up front rather than after a scan, because the scan is the
-  // slow part and the user can fix a missing key without rerunning anything.
-  if (apiKey === undefined && options.json !== true) {
-    process.stderr.write(
-      `warning: ${API_KEY_ENV} is not set, so routing can only report a degraded result.\n`,
-    );
+  if (providerError !== undefined && options.json !== true) {
+    process.stderr.write(`warning: ${providerError}; routing can only report a degraded result.\n`);
   }
 
   const result = await route(prompt, {
     entries: catalog.entries,
     thresholds: resolved.config.thresholds,
     quotaGroups: resolved.config.quotaGroups,
+    provider: resolved.config.provider,
     model: resolved.config.model,
     baseUrl: resolved.config.baseUrl,
     uploadPrompt: options.uploadPrompt ?? resolved.config.uploadPrompt,
+    jev: { env: process.env },
   });
 
   if (options.json) {
@@ -137,7 +144,7 @@ function printResult(result: RouteResult, explain: boolean): void {
   }
 
   process.stdout.write(
-    `\n${result.latencyMs}ms · prompt ${result.promptChars} chars · model ${result.model}` +
+    `\n${result.latencyMs}ms · prompt ${result.promptChars} chars · provider ${result.provider} · model ${result.model}` +
       `${result.tokensIn === undefined ? "" : ` · tokens ${result.tokensIn} in / ${result.tokensOut ?? 0} out`}` +
       `${result.cacheHit ? " · cache hit" : ""}\n\n`,
   );

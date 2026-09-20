@@ -31,7 +31,7 @@ export interface RouteThresholds {
   budgetMs: number;
   /** Prompts are truncated to this before leaving the machine. */
   maxPromptChars: number;
-  /** Timeout for a single HTTP attempt to TypeSafe. */
+  /** Timeout for a single HTTP attempt to the selected Jev provider. */
   requestTimeoutMs: number;
 }
 

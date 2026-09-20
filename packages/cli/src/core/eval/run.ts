@@ -24,6 +24,7 @@ export type RouteCaller = (
     entries: readonly CatalogEntry[];
     thresholds: Partial<RouteThresholds>;
     quotaGroups: readonly QuotaGroup[];
+    provider: string;
     model: string;
     baseUrl?: string;
     uploadPrompt: boolean;
@@ -33,6 +34,7 @@ export type RouteCaller = (
 export interface EvalConfig {
   thresholds: Partial<RouteThresholds>;
   quotaGroups: readonly QuotaGroup[];
+  provider: string;
   model: string;
   /** Forwarded to the Jev client. Without it, `SKILLFUL_BASE_URL` is silently ignored. */
   baseUrl?: string;
@@ -78,6 +80,7 @@ const liveRouteCaller: RouteCaller = (prompt, options) =>
     entries: options.entries,
     thresholds: options.thresholds,
     quotaGroups: options.quotaGroups,
+    provider: options.provider,
     model: options.model,
     ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
     uploadPrompt: options.uploadPrompt,
@@ -122,7 +125,9 @@ export async function runEval(options: EvalOptions): Promise<EvalReport> {
         entries: options.entries,
         thresholds: options.config.thresholds,
         quotaGroups: options.config.quotaGroups,
+        provider: options.config.provider,
         model: options.config.model,
+        ...(options.config.baseUrl === undefined ? {} : { baseUrl: options.config.baseUrl }),
         uploadPrompt: options.config.uploadPrompt,
       });
 
