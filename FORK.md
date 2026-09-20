@@ -26,10 +26,17 @@ already been stored, run this interactively first:
 scripts/store-skillful-vercel-key-macos
 ```
 
-The launcher never writes the key to Claude/Codex configuration. It sets
+The store helper and installer trust only Apple's signed `/usr/bin/security` accessor for the
+shared generic-password item. This avoids repeated approval dialogs in new sessions and subagents
+without using the insecure allow-any-application ACL. The launcher reads from the unlocked login
+Keychain and never writes the key to Claude/Codex configuration. It sets
 `SKILLFUL_HOOK_LAUNCHER` while installing, so every hook records the launcher's absolute path. For
 decision commands the launcher reads the key, unsets unrelated provider keys, forces Vercel, and
 replaces itself with the globally linked `skillful` process.
+
+The launcher does not automate the Passwords app or export a website-password record. If the key
+exists only there, paste it once into the store helper; both repositories then reuse the shared
+generic-password item without another prompt.
 
 ## Rebuild and verify
 

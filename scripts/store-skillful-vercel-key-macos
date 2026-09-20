@@ -5,6 +5,7 @@ set -eu
 # credential can serve both local launchers without being copied into either client config.
 service=${SKILLFUL_VERCEL_KEYCHAIN_SERVICE:-${EVALUATE_VERCEL_KEYCHAIN_SERVICE:-"Vercel AI Gateway - typesafe-mcp"}}
 account=${SKILLFUL_VERCEL_KEYCHAIN_ACCOUNT:-${EVALUATE_VERCEL_KEYCHAIN_ACCOUNT:-"typesafe-mcp"}}
+security_bin=/usr/bin/security
 
 if [ "$(uname -s)" != "Darwin" ]; then
 	echo "This helper requires macOS Keychain." >&2
@@ -31,6 +32,14 @@ if [ -z "$api_key" ]; then
 	exit 1
 fi
 
-security add-generic-password -U -a "$account" -s "$service" -w "$api_key" >/dev/null
+# Trust only Apple's signed `security` accessor. Passing the value through stdin keeps it out of
+# argv and process listings; `security -w` asks for the value twice when it has no argument.
+if ! printf '%s\n%s\n' "$api_key" "$api_key" |
+	"$security_bin" add-generic-password -U -a "$account" -s "$service" \
+		-T "$security_bin" -w >/dev/null 2>&1; then
+	unset api_key
+	echo "Could not store the key in macOS Keychain." >&2
+	exit 1
+fi
 unset api_key
-echo "Stored the dedicated key in macOS Keychain service: $service"
+echo "Stored the dedicated key and authorized non-interactive access through $security_bin."

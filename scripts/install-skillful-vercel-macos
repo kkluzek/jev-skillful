@@ -11,6 +11,8 @@ install_dir=${SKILLFUL_INSTALL_DIR:-"$HOME/.local/bin"}
 source_launcher="$repo_dir/scripts/skillful-vercel"
 installed_launcher="$install_dir/skillful-vercel"
 
+"$repo_dir/scripts/authorize-vercel-key-macos"
+
 mkdir -p "$install_dir"
 if [ -e "$installed_launcher" ] || [ -L "$installed_launcher" ]; then
 	current_target=$(readlink "$installed_launcher" 2>/dev/null || true)

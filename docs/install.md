@@ -62,7 +62,11 @@ scripts/install-skillful-vercel-macos
 The launcher reads Keychain only for commands that make Jev decisions, unsets inherited TypeSafe
 and OpenRouter keys, and exports `SKILLFUL_PROVIDER=vercel`. Discovery refreshes do not need the
 key. `skillful install` records the launcher's absolute path via `SKILLFUL_HOOK_LAUNCHER`, so a
-hook never depends on shell `PATH` or stores the credential.
+hook never depends on shell `PATH` or stores the credential. The store helper and installer
+explicitly trust only Apple's signed `/usr/bin/security` accessor for this generic-password item;
+new sessions and subagents therefore do not need repeated approval dialogs, and the insecure
+allow-any-application ACL is never used. This deliberately allows processes already running as
+your logged-in macOS user to invoke that accessor while the login Keychain is unlocked.
 
 The command detects which runtimes are present and installs for each. Only the runtimes whose
 configuration directory exists are touched:

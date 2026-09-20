@@ -58,7 +58,12 @@ The optional macOS `skillful-vercel` launcher is a separate, readable shell boun
 dedicated Vercel key from Keychain at process start, removes inherited TypeSafe/OpenRouter keys,
 exports the Vercel provider and key only to its Skillful child, then replaces itself with that
 process. `skillful install` records the launcher's absolute path; it never copies the key into an
-agent configuration file.
+agent configuration file. The shared generic-password item trusts only Apple's signed
+`/usr/bin/security` accessor, not every application; this permits non-interactive session and
+subagent startup while the login Keychain is unlocked. The tradeoff is explicit: any process
+already running as the logged-in user can invoke that trusted accessor for this exact item. The
+login Keychain and macOS user boundary remain the protection; this is not suitable for an
+untrusted local-user or untrusted-code execution boundary.
 
 ### Configuration files
 

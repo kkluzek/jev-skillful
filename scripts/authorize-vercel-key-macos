@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+service=${SKILLFUL_VERCEL_KEYCHAIN_SERVICE:-${EVALUATE_VERCEL_KEYCHAIN_SERVICE:-"Vercel AI Gateway - typesafe-mcp"}}
+account=${SKILLFUL_VERCEL_KEYCHAIN_ACCOUNT:-${EVALUATE_VERCEL_KEYCHAIN_ACCOUNT:-"typesafe-mcp"}}
+security_bin=/usr/bin/security
+
+if [ "$(uname -s)" != "Darwin" ]; then
+	echo "This helper requires macOS Keychain." >&2
+	exit 1
+fi
+
+if ! api_key=$("$security_bin" find-generic-password -a "$account" -s "$service" -w 2>/dev/null); then
+	echo "Vercel AI Gateway key not found in macOS Keychain." >&2
+	echo "Run scripts/store-skillful-vercel-key-macos once, then retry." >&2
+	exit 1
+fi
+if [ -z "$api_key" ]; then
+	echo "Vercel AI Gateway key in macOS Keychain is empty." >&2
+	exit 1
+fi
+
+# Re-save the same value with Apple's signed `security` binary as the trusted accessor.
+# `security -w` asks twice when no value follows it; stdin keeps the key out of argv and `ps`.
+if ! printf '%s\n%s\n' "$api_key" "$api_key" |
+	"$security_bin" add-generic-password -U -a "$account" -s "$service" \
+		-T "$security_bin" -w >/dev/null 2>&1; then
+	unset api_key
+	echo "Could not authorize non-interactive Keychain access." >&2
+	exit 1
+fi
+
+if ! verified=$("$security_bin" find-generic-password -a "$account" -s "$service" -w 2>/dev/null); then
+	unset api_key
+	echo "Keychain authorization verification failed." >&2
+	exit 1
+fi
+if [ "$verified" != "$api_key" ]; then
+	unset api_key verified
+	echo "Keychain authorization changed the stored value; refusing to continue." >&2
+	exit 1
+fi
+
+unset api_key verified
+echo "Authorized non-interactive access through $security_bin for Keychain service: $service"

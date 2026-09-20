@@ -3,6 +3,7 @@ set -eu
 
 service=${SKILLFUL_VERCEL_KEYCHAIN_SERVICE:-${EVALUATE_VERCEL_KEYCHAIN_SERVICE:-"Vercel AI Gateway - typesafe-mcp"}}
 account=${SKILLFUL_VERCEL_KEYCHAIN_ACCOUNT:-${EVALUATE_VERCEL_KEYCHAIN_ACCOUNT:-"typesafe-mcp"}}
+security_bin=/usr/bin/security
 
 if [ -n "${SKILLFUL_BINARY:-}" ]; then
 	binary=$SKILLFUL_BINARY
@@ -30,7 +31,7 @@ case ${1:-} in
 			echo "skillful-vercel: macOS Keychain is required" >&2
 			exit 1
 		fi
-		if ! api_key=$(security find-generic-password -a "$account" -s "$service" -w 2>/dev/null); then
+		if ! api_key=$("$security_bin" find-generic-password -a "$account" -s "$service" -w 2>/dev/null); then
 			echo "skillful-vercel: Vercel AI Gateway key not found in macOS Keychain" >&2
 			echo "skillful-vercel: run scripts/store-skillful-vercel-key-macos" >&2
 			exit 1
