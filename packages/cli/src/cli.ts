@@ -1,5 +1,3 @@
-import { CATALOG_KINDS, CATALOG_RUNTIMES } from "./core/index.js";
-import type { CatalogKind, CatalogRuntime } from "./core/index.js";
 import { benchCommand } from "./commands/bench.js";
 import { catalogCommand } from "./commands/catalog.js";
 import { doctorCommand } from "./commands/doctor.js";
@@ -7,8 +5,12 @@ import { evalCommand } from "./commands/eval.js";
 import { exportCaseCommand } from "./commands/export-case.js";
 import { hookCommand } from "./commands/hook.js";
 import { installCommand, uninstallCommand } from "./commands/install.js";
+import { refreshCommand } from "./commands/refresh.js";
+import { remindCommand } from "./commands/remind.js";
 import { reportCommand, telemetryCommand } from "./commands/report.js";
 import { routeCommand } from "./commands/route.js";
+import type { CatalogKind, CatalogRuntime } from "./core/index.js";
+import { CATALOG_KINDS, CATALOG_RUNTIMES } from "./core/index.js";
 
 const USAGE = `skillful — capability router for coding agents
 
@@ -17,6 +19,8 @@ Usage:
   skillful uninstall [options]      Remove the Skillful hook, leaving other hooks alone
   skillful doctor [options]         Report whether the hook actually works
   skillful hook                      Hook entry point. Reads event JSON on stdin
+  skillful refresh [options]         Refresh installed CLI and runtime-specific MCP tools
+  skillful remind                    Claude reminder hook entry point
   skillful export-case [options]     Export a redacted routing case for a bug report
   skillful report [options]          Write a self-contained HTML report
   skillful dashboard [options]       Write the report to its default path and open it
@@ -33,6 +37,12 @@ Install options:
 
 Doctor options:
   --offline              Skip the live route trial (no key or network needed)
+  --json                 Emit machine-readable JSON
+
+Refresh options:
+  --runtime <runtime>    Refresh codex or claude-code (repeatable; default both)
+  --cli-only             Refresh installed CLIs only
+  --mcp-only             Refresh MCP tools only
   --json                 Emit machine-readable JSON
 
 Catalog options:
@@ -78,7 +88,7 @@ Configuration file:
   ~/.config/skillful/config.json   Thresholds and quota groups. Never a credential.
 `;
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 /** Dispatch a parsed command line. Returns the process exit code. */
 export async function run(argv: readonly string[]): Promise<number> {
@@ -144,7 +154,35 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (command === "hook") {
     // No flags and no error path. This command is called by an agent runtime on every prompt,
     // so it always exits 0 and always writes exactly one JSON object to stdout.
-    return hookCommand({ stdin: await readStdinRaw() });
+    const parsed = parseHookFlags(rest);
+    return hookCommand({
+      stdin: await readStdinRaw(),
+      ...(parsed.runtime === undefined ? {} : { runtime: parsed.runtime }),
+    });
+  }
+
+  if (command === "remind") {
+    return remindCommand({ stdin: await readStdinRaw() });
+  }
+
+  if (command === "refresh") {
+    const parsed = parseRefreshFlags(rest);
+    if (parsed.error !== undefined) {
+      process.stderr.write(`${parsed.error}\n\n${USAGE}`);
+      return 1;
+    }
+    if (parsed.help) {
+      process.stdout.write(USAGE);
+      return 0;
+    }
+    return refreshCommand({
+      runtimes: parsed.runtimes,
+      includeCli: !parsed.mcpOnly,
+      includeMcp: !parsed.cliOnly,
+      json: parsed.json,
+      quiet: parsed.quiet,
+      managed: parsed.managed,
+    });
   }
 
   if (command === "bench") {
@@ -272,6 +310,74 @@ export async function run(argv: readonly string[]): Promise<number> {
   return 1;
 }
 
+interface ParsedHookFlags {
+  runtime?: CatalogRuntime;
+}
+
+interface ParsedRefreshFlags {
+  runtimes: Array<Extract<CatalogRuntime, "codex" | "claude-code">>;
+  cliOnly: boolean;
+  mcpOnly: boolean;
+  json: boolean;
+  quiet: boolean;
+  managed: boolean;
+  help: boolean;
+  error?: string;
+}
+
+function parseRefreshFlags(argv: readonly string[]): ParsedRefreshFlags {
+  const out: ParsedRefreshFlags = {
+    runtimes: [],
+    cliOnly: false,
+    mcpOnly: false,
+    json: false,
+    quiet: false,
+    managed: false,
+    help: false,
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--runtime") {
+      const value = argv[index + 1];
+      if (value !== "codex" && value !== "claude-code") {
+        out.error = `Invalid --runtime: ${value ?? "missing"} (expected codex or claude-code)`;
+        return out;
+      }
+      out.runtimes.push(value);
+      index += 1;
+    } else if (arg === "--cli-only") out.cliOnly = true;
+    else if (arg === "--mcp-only") out.mcpOnly = true;
+    else if (arg === "--json") out.json = true;
+    else if (arg === "--quiet") out.quiet = true;
+    else if (arg === "-h" || arg === "--help") out.help = true;
+    else if (arg === "--managed-by-skillful") {
+      // Ownership marker used by the hook installer.
+      out.managed = true;
+    } else {
+      out.error = `Unknown option: ${arg}`;
+      return out;
+    }
+  }
+  if (out.cliOnly && out.mcpOnly) out.error = "--cli-only and --mcp-only cannot be used together";
+  return out;
+}
+
+function parseHookFlags(argv: readonly string[]): ParsedHookFlags {
+  const out: ParsedHookFlags = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--runtime") {
+      const value = argv[index + 1];
+      const runtime =
+        value === undefined ? undefined : CATALOG_RUNTIMES.find((item) => item === value);
+      if (runtime !== undefined) out.runtime = runtime;
+      index += 1;
+    }
+    // The ownership marker is intentionally ignored by the command parser.
+  }
+  return out;
+}
+
 /**
  * Read stdin verbatim, without the trimming `readStdin` does for prompts.
  *
@@ -344,9 +450,8 @@ function parseCatalogFlags(argv: readonly string[]): ParsedCatalogFlags {
         return out;
       }
       i += 1;
-      const rejected = arg === "--kind"
-        ? addKind(out.kinds, value)
-        : addRuntime(out.runtimes, value);
+      const rejected =
+        arg === "--kind" ? addKind(out.kinds, value) : addRuntime(out.runtimes, value);
       if (rejected !== null) {
         out.error = rejected;
         return out;

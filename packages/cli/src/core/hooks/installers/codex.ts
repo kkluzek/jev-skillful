@@ -1,14 +1,14 @@
 /**
  * Install the hook into `~/.codex/hooks.json`.
  *
- * **This target was measured, not assumed.** Two candidate locations existed on the machine,
- * so both were inspected and one was probed by running the agent:
+ * **This target was measured, not assumed.** Both supported configuration surfaces were
+ * inspected, and the JSON surface was probed by running the agent:
  *
  * - `~/.codex/hooks.json` holds real hook definitions: `hooks.UserPromptSubmit` is an array of
  *   `{matcher, hooks: [{type, command, commandWindows}]}`, exactly the Claude Code shape.
- * - `~/.codex/config.toml` has a `[hooks]` table, but its only child is `[hooks.state]`, a
- *   ledger of `path -> trusted_hash` covering twenty-five entries. It records which hook
- *   scripts Codex has been told to trust; it does not define any hooks.
+ * - On the measured machine, `~/.codex/config.toml` has a `[hooks]` table whose only child is
+ *   `[hooks.state]`, a ledger of `path -> trusted_hash`. Codex supports inline hook tables in this
+ *   file too, but that existing state table contains no hook definitions.
  *
  * A probe confirmed which one is live: a temporary entry appended to `hooks.json` produced
  * `hook: UserPromptSubmit` lines in Codex's own output, so the file is read and its hooks run.
@@ -24,7 +24,7 @@
 
 import path from "node:path";
 import type { CatalogRuntime } from "../../catalog/types.js";
-import { installJsonHook, uninstallJsonHook, type JsonHookSpec } from "./json-hook.js";
+import { installJsonHook, type JsonHookSpec, uninstallJsonHook } from "./json-hook.js";
 import type { InstallContext, InstallOutcome, UninstallOutcome } from "./types.js";
 
 const RUNTIME: CatalogRuntime = "codex";
@@ -36,7 +36,7 @@ function spec(ctx: InstallContext): JsonHookSpec {
   return {
     runtime: RUNTIME,
     target: path.join(ctx.env["CODEX_HOME"] ?? path.join(ctx.homeDir, ".codex"), "hooks.json"),
-    event: "UserPromptSubmit",
+    events: ["UserPromptSubmit", "SessionStart"],
     notes: [TRUST_NOTE],
   };
 }

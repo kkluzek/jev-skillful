@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bestagentkits/jev-skillful.git"
+    "url": "git+https://github.com/kkluzek/jev-skillful.git"
   },
   "engines": {
     "node": ">=20"

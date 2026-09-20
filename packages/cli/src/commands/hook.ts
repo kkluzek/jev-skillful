@@ -12,8 +12,11 @@
  * to `skillful doctor` instead of into the user's terminal.
  */
 
-import { runHook, type HookInput } from "../core/hooks/runner.js";
 import { scanCatalog } from "../core/catalog/scan.js";
+import type { CatalogRuntime } from "../core/catalog/types.js";
+import { type HookInput, isDisabled, runHook } from "../core/hooks/runner.js";
+import { preparePendingReminder } from "../core/reminder/runner.js";
+import { writeHookPayload } from "./hook-output.js";
 
 export interface HookCommandOptions {
   homeDir?: string;
@@ -21,6 +24,7 @@ export interface HookCommandOptions {
   env?: Readonly<Record<string, string | undefined>>;
   /** Raw stdin text. Empty or malformed input is tolerated and treated as "no prompt". */
   stdin: string;
+  runtime?: CatalogRuntime;
 }
 
 /** Parse stdin into a hook input, tolerating anything that is not the expected shape. */
@@ -49,6 +53,9 @@ export function parseHookInput(stdin: string): HookInput {
       ...(typeof record["hook_event_name"] === "string"
         ? { hook_event_name: record["hook_event_name"] }
         : {}),
+      ...(typeof record["transcript_path"] === "string"
+        ? { transcript_path: record["transcript_path"] }
+        : {}),
     };
   } catch {
     return { prompt: trimmed };
@@ -65,6 +72,7 @@ export async function hookCommand(options: HookCommandOptions): Promise<number> 
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? env["HOME"] ?? ".";
   const input = parseHookInput(options.stdin);
+  if (options.runtime !== undefined) input.runtime = options.runtime;
 
   const outcome = await runHook(input, {
     homeDir,
@@ -73,6 +81,26 @@ export async function hookCommand(options: HookCommandOptions): Promise<number> 
     scan: scanCatalog,
   });
 
-  process.stdout.write(`${JSON.stringify(outcome.payload)}\n`);
+  let acknowledgeReminder: (() => void) | undefined;
+  if (
+    !isDisabled(env) &&
+    options.runtime === "claude-code" &&
+    (input.hook_event_name ?? "UserPromptSubmit") === "UserPromptSubmit"
+  ) {
+    const pending = preparePendingReminder(input, { homeDir, env });
+    if (pending !== null) {
+      const existing = outcome.payload.hookSpecificOutput?.additionalContext;
+      outcome.payload = {
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext:
+            existing === undefined ? pending.text : `${existing}\n\n${pending.text}`,
+        },
+      };
+      acknowledgeReminder = pending.acknowledge;
+    }
+  }
+
+  if (await writeHookPayload(outcome.payload)) acknowledgeReminder?.();
   return 0;
 }

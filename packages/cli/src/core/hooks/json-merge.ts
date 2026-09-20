@@ -12,7 +12,17 @@
  * - Only entries carrying our marker are touched. Everything else keeps its exact position.
  */
 
-import { closeSync, copyFileSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  copyFileSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 /**
@@ -177,6 +187,8 @@ export function removeSkillfulEntries(entries: readonly HookEntry[]): {
   for (const entry of entries) {
     if (entry !== null && typeof entry === "object" && isSkillfulEntry(entry)) {
       removed += 1;
+      const foreignHooks = entry.hooks.filter((hook) => !isSkillfulCommand(hook?.command));
+      if (foreignHooks.length > 0) kept.push({ ...entry, hooks: foreignHooks });
     } else {
       kept.push(entry);
     }
@@ -200,4 +212,18 @@ export function upsertSkillfulEntry(
 
   const changed = JSON.stringify(next) !== JSON.stringify(entries);
   return { entries: next, changed, replaced: removed };
+}
+
+/** Install all of our entries for one event as one idempotent replacement. */
+export function upsertSkillfulEntries(
+  entries: readonly HookEntry[],
+  additions: readonly HookEntry[],
+): { entries: HookEntry[]; changed: boolean; replaced: number } {
+  const { entries: kept, removed } = removeSkillfulEntries(entries);
+  const next = [...kept, ...additions];
+  return {
+    entries: next,
+    changed: JSON.stringify(next) !== JSON.stringify(entries),
+    replaced: removed,
+  };
 }

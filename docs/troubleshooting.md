@@ -112,8 +112,25 @@ behind, which was visible in a diff and survived into the next install.
 rm -rf ~/.cache/skillful
 ```
 
-Deleting it costs one round trip per prompt until it refills. The cache never holds your prompt
-text and never holds a key, so there is no reason to be careful about deleting it.
+Deleting it removes both route decisions and the capability inventory. Route decisions repopulate
+on prompts; exact MCP and CLI capabilities repopulate only on the next session-start refresh or an
+explicit `skillful refresh`. The cache never holds your prompt text or an API key.
+
+The Claude reminder index is also below this cache root. Its session state and decision log are in
+`${XDG_STATE_HOME:-~/.local/state}/skillful/`. Unlike route cache entries, the reminder decision
+log intentionally contains the bounded query used for diagnosis. Treat it as sensitive. Removing
+these files is safe; the index and session state are rebuilt.
+
+## The reminder layer did not run
+
+This is an explicit fail-open status, not a claim that nothing was relevant. Common causes are a
+missing/rejected `TYPESAFE_API_KEY`, `SKILLFUL_UPLOAD_PROMPT=false`, an empty `MEMORY.md` index, or
+the 1800ms reminder budget expiring. Claude continues without a reminder. The decision log above
+records the category without ever recording the key.
+
+Reminder selection runs only on Claude resume and compaction, not every prompt. After compaction,
+verify that both Skillful entries remain in `hooks.PostCompact` and `hooks.SessionStart`; reinstall
+is idempotent and preserves unrelated hooks.
 
 If a route seems stale after you installed or removed capabilities, it should not be: the catalog
 fingerprint is part of the cache key, so any change to the catalog invalidates every entry
@@ -133,6 +150,25 @@ Only `global` and `project` scopes in the current working directory are scanned.
 unrelated directory is not in the catalog, which is why running from the project you are working in
 matters.
 
+## A newly installed or removed tool is not visible yet
+
+The `SessionStart` refresh is asynchronous. It first publishes a fail-closed marker, then checkpoints
+affected old partitions as stale before live discovery and publishes successful partitions
+independently. A queued or interrupted process therefore cannot leave removed tools routable as
+fresh. Failed or stale partitions are not routed. Wait for the background
+refresh to finish, or run the client-specific refresh explicitly:
+
+```bash
+skillful refresh --runtime codex --json
+skillful refresh --runtime claude-code --json
+```
+
+An explicit refresh exits `2` if any provider or server inventory is incomplete. The JSON report
+identifies the failed partition; successful partitions are still saved.
+
+Do not compare the two inventories as if they were shared. Each client has its own MCP and plugin
+configuration, and Skillful partitions the cache by runtime, server and project.
+
 ## `npx` is slow
 
 Each hook invocation is a Node process. On a cold start that is most of the budget. The installer
@@ -147,5 +183,5 @@ a cache hit took 221ms.
 
 - **Bad routing** — `skillful export-case --prompt "..."`, then the `bad-route` issue template.
 - **Install or hook** — `skillful doctor`, then the `install-problem` issue template.
-- **A vulnerability** — [privately](https://github.com/bestagentkits/jev-skillful/security/advisories/new),
+- **A vulnerability** — [privately](https://github.com/kkluzek/jev-skillful/security/advisories/new),
   never in a public issue.

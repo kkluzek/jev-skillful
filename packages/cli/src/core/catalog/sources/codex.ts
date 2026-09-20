@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  collectMarkdownItems,
   collectSkillFiles,
   describeMcpServer,
   readSkillParts,
@@ -7,14 +8,14 @@ import {
 } from "../collect.js";
 import { buildEntry } from "../entries.js";
 import { filesWithExtension, readTextSafe } from "../fsx.js";
+import { parseMcpServersFromToml } from "../toml.js";
 import {
   type CatalogEntry,
   type CatalogScope,
   type CatalogSource,
-  type ScanContext,
   normaliseDescription,
+  type ScanContext,
 } from "../types.js";
-import { parseMcpServersFromToml } from "../toml.js";
 
 /**
  * Codex surfaces.
@@ -37,6 +38,9 @@ export const codexSource: CatalogSource = {
   runtime: "codex",
   async scan(ctx) {
     const entries: CatalogEntry[] = [];
+    const codexHome = path.resolve(
+      ctx.env["CODEX_HOME"]?.trim() || path.join(ctx.homeDir, ".codex"),
+    );
 
     for (const [root, scope] of skillRoots(ctx)) {
       for (const skill of await collectSkillFiles(root, { maxDepth: 2 })) {
@@ -46,11 +50,26 @@ export const codexSource: CatalogSource = {
     }
 
     for (const [base, scope] of [
-      [path.join(ctx.homeDir, ".codex"), "global"],
+      [codexHome, "global"],
       [ctx.projectDir === null ? null : path.join(ctx.projectDir, ".codex"), "project"],
     ] as const) {
       if (base === null) continue;
       await scanConfigDir(base, scope, entries);
+    }
+
+    // Legacy custom prompts are global-only and invoked as `/prompts:<stem>`.
+    for (const prompt of await collectMarkdownItems(path.join(codexHome, "prompts"))) {
+      entries.push(
+        buildEntry("codex", "command", "global", {
+          name: `/prompts:${path.basename(prompt.file).replace(/\.md$/i, "")}`,
+          description: normaliseDescription(prompt.description),
+          ...(prompt.whenToUse === undefined
+            ? {}
+            : { whenToUse: normaliseDescription(prompt.whenToUse) }),
+          sourcePath: prompt.file,
+          ...(prompt.degraded ? { degraded: true } : {}),
+        }),
+      );
     }
 
     return entries;
@@ -65,7 +84,9 @@ function skillRoots(ctx: ScanContext): Array<[string, CatalogScope]> {
     // as global so the duplicate is not counted twice.
     return [[path.resolve(override.trim()), "global"]];
   }
-  const roots: Array<[string, CatalogScope]> = [[path.join(ctx.homeDir, ".agents", "skills"), "global"]];
+  const roots: Array<[string, CatalogScope]> = [
+    [path.join(ctx.homeDir, ".agents", "skills"), "global"],
+  ];
   if (ctx.projectDir !== null) {
     roots.push([path.join(ctx.projectDir, ".agents", "skills"), "project"]);
   }
@@ -81,6 +102,7 @@ async function scanConfigDir(
   const configText = await readTextSafe(configPath);
   if (configText !== null) {
     for (const server of parseMcpServersFromToml(configText)) {
+      if (server.enabled === false) continue;
       const meta: Record<string, string> = {};
       if (server.command !== undefined) meta.command = server.command;
       if (server.args !== undefined) meta.args = server.args.join(" ");

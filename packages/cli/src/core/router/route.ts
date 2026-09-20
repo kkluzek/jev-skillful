@@ -11,8 +11,13 @@
  */
 
 import type { CatalogEntry, CatalogKind, CatalogRuntime } from "../catalog/types.js";
-import { callSystemOne, JevError, type JevClientOptions } from "../jev/client.js";
-import { DEFAULT_MODEL, isChoiceAnswer, isNoulAnswer, type SystemOneResponse } from "../jev/types.js";
+import { callSystemOne, type JevClientOptions, JevError } from "../jev/client.js";
+import {
+  DEFAULT_MODEL,
+  isChoiceAnswer,
+  isNoulAnswer,
+  type SystemOneResponse,
+} from "../jev/types.js";
 import { buildShortlist, DEFAULT_QUOTA_GROUPS, type QuotaGroup } from "../retrieval/shortlist.js";
 import {
   buildRouteRequest,
@@ -24,8 +29,8 @@ import {
 import {
   DEFAULT_THRESHOLDS,
   evaluatePromptHeuristics,
-  truncatePrompt,
   type RouteThresholds,
+  truncatePrompt,
 } from "./thresholds.js";
 
 /** A second installed copy of the same capability, for a different runtime root. */
@@ -41,6 +46,8 @@ export interface RoutePick {
   name: string;
   description: string;
   sourcePath: string;
+  /** Directly executable CLI spelling; present only for CLI command picks. */
+  invocationHint?: string;
   /**
    * Other runtime roots that hold an indistinguishable copy of this same capability.
    *
@@ -175,7 +182,11 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
     return finish({ kind: "skipped", reason: "heuristic", detail: heuristic.reason });
   }
 
-  const built = buildShortlist(options.entries, prompt, options.quotaGroups ?? DEFAULT_QUOTA_GROUPS);
+  const built = buildShortlist(
+    options.entries,
+    prompt,
+    options.quotaGroups ?? DEFAULT_QUOTA_GROUPS,
+  );
   for (const entry of built.entries) {
     shortlist.push(entry.id);
     shortlistDetail.push({ id: entry.id, kind: entry.kind, score: entry.score });
@@ -200,7 +211,11 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
 
   const budgetLeft = thresholds.budgetMs - (now() - startedAt);
   if (budgetLeft < MIN_ATTEMPT_BUDGET_MS) {
-    return finish({ kind: "degraded", reason: "timeout", detail: "Budget consumed before request" });
+    return finish({
+      kind: "degraded",
+      reason: "timeout",
+      detail: "Budget consumed before request",
+    });
   }
 
   const controller = new AbortController();
@@ -239,17 +254,22 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
       ranking.push({ id: candidate.id, noul: answer.noul });
     }
   });
-  ranking.sort((x, y) => (y.noul - x.noul) || (x.id < y.id ? -1 : 1));
+  ranking.sort((x, y) => y.noul - x.noul || (x.id < y.id ? -1 : 1));
 
   const primaryAnswer = response.answers[PRIMARY_QUESTION_ID];
   if (!isChoiceAnswer(primaryAnswer)) {
     return finish(
-      { kind: "degraded", reason: "malformed", detail: "Response contained no usable primary answer" },
+      {
+        kind: "degraded",
+        reason: "malformed",
+        detail: "Response contained no usable primary answer",
+      },
       extras,
     );
   }
 
-  const noneP = primaryAnswer.probabilities[NONE_OPTION] ?? (primaryAnswer.choice === NONE_OPTION ? 1 : 0);
+  const noneP =
+    primaryAnswer.probabilities[NONE_OPTION] ?? (primaryAnswer.choice === NONE_OPTION ? 1 : 0);
   const probability = primaryAnswer.probabilities[primaryAnswer.choice] ?? 0;
 
   if (primaryAnswer.choice === NONE_OPTION || noneP >= thresholds.noneThreshold) {
@@ -279,7 +299,10 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
         reason: "below-threshold",
         detail: `Winning probability ${probability.toFixed(3)} is below ${thresholds.minWinnerProbability}`,
       },
-      { ...extras, primary: { id: winner.id, noneP, confidence: primaryAnswer.confidence, probability } },
+      {
+        ...extras,
+        primary: { id: winner.id, noneP, confidence: primaryAnswer.confidence, probability },
+      },
     );
   }
 
@@ -301,7 +324,10 @@ export async function route(prompt: string, options: RouteOptions): Promise<Rout
       confidence: primaryAnswer.confidence,
       noneP,
     },
-    { ...extras, primary: { id: winner.id, noneP, confidence: primaryAnswer.confidence, probability } },
+    {
+      ...extras,
+      primary: { id: winner.id, noneP, confidence: primaryAnswer.confidence, probability },
+    },
   );
 }
 
@@ -312,6 +338,9 @@ function toPick(entry: CatalogEntry, alternates: readonly RouteAlternate[]): Rou
     name: entry.name,
     description: entry.description,
     sourcePath: entry.sourcePath,
+    ...(entry.details?.type === "cli-command"
+      ? { invocationHint: entry.details.invocationHint }
+      : {}),
     alternates: [...alternates],
   };
 }

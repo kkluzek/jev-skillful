@@ -32,9 +32,7 @@ describe("parseMcpServersFromToml", () => {
 
   it("handles quoted server names", () => {
     const text = ['[mcp_servers."my server"]', 'command = "run"'].join("\n");
-    expect(parseMcpServersFromToml(text)).toEqual([
-      { name: "my server", command: "run" },
-    ]);
+    expect(parseMcpServersFromToml(text)).toEqual([{ name: "my server", command: "run" }]);
   });
 
   it("ignores comment-only and unrelated tables", () => {
@@ -58,6 +56,12 @@ describe("parseMcpServersFromToml", () => {
   it("drops servers with no command or url", () => {
     const text = ["[mcp_servers.empty]", 'type = "http"'].join("\n");
     expect(parseMcpServersFromToml(text)).toEqual([]);
+  });
+
+  it("retains explicit enablement so disabled servers can be filtered", () => {
+    expect(
+      parseMcpServersFromToml('[mcp_servers.off]\ncommand = "off"\nenabled = false\n'),
+    ).toEqual([{ name: "off", command: "off", enabled: false }]);
   });
 
   it("returns nothing for an empty or unrelated document", () => {

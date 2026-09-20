@@ -12,7 +12,9 @@ prompt
   |
   +-- hook (per runtime)          reads the prompt, consults the cache, applies a 2000ms budget
   |
-  +-- catalog scan (local)        reads 4 surfaces across 4 runtimes; no network
+  +-- SessionStart refresh        asynchronous, exact client MCP/plugin state + CLI trees
+  |
+  +-- catalog scan (local)        static surfaces + capability cache; no live discovery
   |
   +-- router (one Jev request)    BM25 shortlist -> one `choice` question plus per-candidate `noul`
   |
@@ -26,13 +28,14 @@ them and normalises the result into one entry shape.
 
 | Runtime | Kind | Where it is read from |
 |---|---|---|
-| claude-code | skill | `~/.claude/skills/<name>/SKILL.md`, `<project>/.claude/skills`, and `~/.claude/plugins/**` |
-| claude-code | agent | `~/.claude/agents/<name>.md`, `<project>/.claude/agents` |
-| claude-code | command | `~/.claude/commands/**/<name>.md` (nested paths become `parent:name`) |
-| claude-code | mcp | `~/.claude.json` under `mcpServers` and `projects[<path>].mcpServers`, plus `<project>/.mcp.json`, plus `~/.claude/mcp.json` |
-| codex | skill | `$AGENTKIT_CODEX_SKILLS_ROOT`, else `~/.agents/skills/<name>/SKILL.md`, plus `<project>/.agents/skills` |
+| claude-code | skill | `$CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md`, `<project>/.claude/skills`, plus active versions from `claude plugin list --json` (exact `/plugin:skill`) |
+| claude-code | agent | `$CLAUDE_CONFIG_DIR/agents/<name>.md`, `<project>/.claude/agents`, plus active plugin agents |
+| claude-code | command | `$CLAUDE_CONFIG_DIR/commands/**/<name>.md` (exact `/parent:name`), plus active plugin commands (exact `/plugin:command`) |
+| claude-code | mcp | configured client state plus active plugin `.mcp.json`; exact tools are listed only from user/local or approved project targets |
+| codex | skill | `$AGENTKIT_CODEX_SKILLS_ROOT`, else `~/.agents/skills/<name>/SKILL.md`, plus `<project>/.agents/skills` and active `codex plugin list --json` versions |
 | codex | agent | `~/.codex/agents/<name>.toml` (top-level `name` and `developer_instructions`) |
-| codex | mcp | `~/.codex/config.toml` `[mcp_servers.<name>]` tables, plus `<project>/.codex/config.toml` |
+| codex | command | `~/.codex/prompts/<name>.md` (exact invocation `/prompts:name`) |
+| codex | mcp | exact effective servers/tools from `codex app-server --stdio` for an ephemeral thread rooted in the current project |
 | pi | skill | `~/.pi/agent/skills/<name>/SKILL.md`, `<project>/.pi/skills` |
 | pi | agent | `~/.pi/agent/agents/<name>.md`, `<project>/.pi/agents` |
 | pi | rule | `~/.pi/agent/rules/<name>.md` |
@@ -55,18 +58,20 @@ code instead of guessed:
 - **Codex keeps skills outside `~/.codex`.** Skills live in the shared `~/.agents/skills` root that
   other `agents`-convention clients also use, which is why an empty `~/.codex/skills` is expected.
 
-One surface is still open and is probed in phase 4: whether Codex reads hooks from `~/.codex/hooks.json`
-or from `[hooks.<event>]` tables in `~/.codex/config.toml`. Both files exist, and AgentKit writes both.
+Codex hook placement for this installer was settled by a live probe: executable hook definitions
+are read from `~/.codex/hooks.json`. Current Codex also supports inline hook tables in
+`config.toml`; the existing `[hooks.state]` table on the measured machine is its trust ledger, not
+an inline hook definition. Skillful deliberately uses the JSON surface shared with Claude Code.
 
 ## Identity and fingerprint
 
 An entry's id is `runtime:kind:scope:name`. It deliberately excludes the filesystem path, so moving a
 skills directory does not change the identity of anything inside it.
 
-The catalog fingerprint is a sha256 over the sorted `kind:runtime:scope:name:description` of every
-entry. It is one half of the route cache key, so it must change when the meaning of the catalog changes
-and stay stable when incidental details do. Reordering files does not change it; adding, removing,
-renaming, or re-describing an entry does. Paths are excluded for the same reason ids are.
+The catalog fingerprint is a sha256 over sorted entry identity, retrieval text and typed capability
+identity/availability. It is one half of the route cache key, so it changes when a command tree or
+tool availability changes while staying stable across incidental file ordering and modification
+times. Paths are excluded except where a hashed effective origin is part of the typed identity.
 
 ## Measured behaviour
 
@@ -144,8 +149,8 @@ Two mechanisms cover four runtimes, because two pairs of runtimes share a contra
 
 | Runtime | File | Mechanism |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `hooks.UserPromptSubmit`, command hook |
-| Codex | `~/.codex/hooks.json` | `hooks.UserPromptSubmit`, command hook |
+| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json` | `UserPromptSubmit` routes; asynchronous `SessionStart` refresh; `PostCompact`/resume reminders |
+| Codex | `~/.codex/hooks.json` | `UserPromptSubmit` routes; asynchronous `SessionStart` refreshes Codex MCP/plugin + CLI cache |
 | Pi | `~/.pi/agent/extensions/skillful/index.ts` | extension, `before_agent_start` |
 | OMP | `~/.omp/agent/extensions/skillful/index.ts` | extension, `before_agent_start` |
 
@@ -153,15 +158,73 @@ The two extension runtimes share one generated file, which forwards the prompt t
 on a child process. That keeps one implementation of routing, caching, budgeting and rendering —
 the CLI's — serving all four runtimes instead of a second one that would drift from the first.
 
-### Where Codex reads hooks from, and how it was settled
+### Exact MCP and CLI capability cache
 
-Two candidate locations existed, so both were inspected and one was probed by running the agent.
+Live discovery is separated from prompt routing. `skillful refresh` writes independent, versioned
+cache partitions for each runtime, MCP server, and workspace. A failed server refresh retains its
+last known entries as stale diagnostic evidence but excludes them from routing; removing a server
+from an authoritative client inventory removes its partition.
+
+The installed `SessionStart` hook is asynchronous for both Codex and Claude Code. It runs once for
+`startup`, `resume`, or `clear` without blocking the first prompt. Before it waits for the shared
+lock, it publishes a per-runtime/workspace marker that makes affected old partitions unroutable.
+After acquiring the lock it checkpoints them as stale, then atomically publishes each completed
+partition. A queued, timed-out, or interrupted refresh therefore cannot expose an old inventory as
+fresh. MCP and effective plugin partitions both require an exact workspace match.
+
+MCP identities include client, effective workspace, server, tool, and a redacted origin identity. Codex and Claude Code are
+never merged, even when both define a server with the same name. Claude Code uses a bounded
+`claude mcp list` health-check followed by `system/init` metadata with hooks disabled, and
+terminates that client process immediately after init, before model inference. This captures
+managed connectors and the exact tool names backed
+by Claude's own OAuth state. Codex is asked for its own effective tool catalog through
+`mcpServerStatus/list` on App Server after starting an ephemeral, project-rooted thread. A
+config/SDK compatibility path is non-authoritative and supports stdio, Streamable HTTP, and legacy
+SSE. No tool is called; schemas and credentials are not persisted. The displayed invocation is the
+concrete client-specific `mcp__server__tool` name.
+
+Plugin files are not found by globbing every historical cache directory. Each client is the
+authority for enablement and version selection: `claude plugin list --json` and
+`codex plugin list --json` select the active install roots, after which Skillful reads only passive,
+bounded manifest and Markdown metadata from those roots.
+
+CLI discovery starts from direct user installations, not from the contents of `$PATH`. Homebrew
+install receipts and top-level uv/npm/pnpm/Bun inventories exclude transitive dependencies. The
+set is intersected with Carapace, Homebrew, or existing zsh completion availability. Absolute
+directories already present in `FPATH` and standard user zsh completion directories are read as
+passive metadata; shell startup files are never sourced. `$PATH` is used only to resolve a specific
+basename after a manager proves direct ownership. Recursive Carapace `export` JSON is the preferred
+metadata source. A bounded, sandboxed `--help` walk exists only for a small explicit adapter set
+when structured export is unavailable. BM25 selects within a dedicated CLI quota before Jev makes
+the final choice.
+
+### Claude reminder layer
+
+Reminder retrieval is separate from capability routing. It reads a fixed corpus: the current
+Claude project's `memory/MEMORY.md` targets and bodies, global `CLAUDE.md`, `rules/*.md`,
+`verification-doctrine*.md`, and `##` sections in the project-root `CLAUDE.md`. It never scans the
+whole project and never writes those sources. The parser uses the same memory index, wikilink and
+rule-definition patterns as the installed memory-health script.
+
+Weighted BM25 (including Polish folding, identifier/file splitting, citation contexts and a light
+4-gram fallback) produces at most 12 candidates. One batched TypeSafe request asks a separate
+`noul` relevance question for each candidate. At most three passing titles are rendered. Memory
+and rule bodies help ranking but are never injected. `PostCompact` stores the selection privately;
+the next `SessionStart(source=compact)` injects it because Claude discards `PostCompact` context.
+If persistence fails, a separate private marker carries the diagnostic to that supported event.
+Shown/deduplication state is committed only after the hook JSON flushes to Claude. Resume selects
+directly. A five-minute cooldown and per-session IDs suppress repeats.
+
+### Where Skillful installs Codex hooks
+
+Both supported configuration surfaces were considered, and the JSON surface was probed by running
+the agent.
 
 - `~/.codex/hooks.json` holds real hook definitions. `hooks.UserPromptSubmit` is an array of
   `{matcher, hooks: [{type, command, commandWindows}]}`, the same shape Claude Code uses.
-- `~/.codex/config.toml` has a `[hooks]` table whose only child is `[hooks.state]` — a ledger of
-  `path -> trusted_hash` covering twenty-five entries. It records which hook scripts Codex has been
-  told to trust. It defines no hooks.
+- On the measured machine, `~/.codex/config.toml` has a `[hooks]` table whose only child is
+  `[hooks.state]` — a ledger of `path -> trusted_hash`. Codex also supports inline hook tables in
+  this file, but none were present there during the probe.
 
 A temporary entry appended to `hooks.json` produced `hook: UserPromptSubmit` lines in Codex's own
 output, so that file is read and its hooks run. The probe also surfaced a caveat the installer
@@ -169,10 +232,6 @@ reports rather than hides: the probe command did not itself execute, while the p
 all `.cjs` files under `~/.codex/hooks/` with a `trusted_hash` recorded in `config.toml` — did. The
 installer therefore writes into `hooks.json` and documents the trust step, and deliberately does not
 fabricate a `trusted_hash` to authorise its own code inside another tool's security model.
-
-The probe run also revealed that this machine's Codex quota is exhausted until 2026-09-19, which
-blocks a full agent-session verification of that runtime for now. The install itself is verified; a
-live Codex session receiving an injection is not.
 
 ### Measured hook behaviour
 
@@ -201,4 +260,3 @@ The second: uninstall left an emptied `hooks.UserPromptSubmit: []` behind. Unins
 leave the configuration as it was found, and an empty array is a visible trace in a diff that would
 also survive into the next install. Emptied containers are now pruned, and a file that held nothing
 but the Skillful hook is removed.
-

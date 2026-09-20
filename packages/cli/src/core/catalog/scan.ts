@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import os from "node:os";
+import path from "node:path";
+import { defaultCapabilityCachePath, readCapabilityEntries } from "../discovery/cache.js";
 import { catalogFingerprint } from "./fingerprint.js";
 import { findProjectRoot } from "./project-scope.js";
 import { claudeCodeSource } from "./sources/claude-code.js";
@@ -13,6 +16,9 @@ const ENV_ALLOWLIST = [
   "AGENTKIT_OMP_HOME",
   "OMP_HOME",
   "PI_CODING_AGENT_DIR",
+  "CODEX_HOME",
+  "CLAUDE_CONFIG_DIR",
+  "XDG_CACHE_HOME",
 ] as const;
 
 const ALL_SOURCES = [claudeCodeSource, codexSource, piSource, ompSource];
@@ -24,6 +30,10 @@ export interface ScanOptions {
   env?: Readonly<Record<string, string | undefined>>;
   /** Limit the scan to some runtimes. Defaults to all of them. */
   runtimes?: readonly CatalogRuntime[];
+  /** Read entries produced by explicit `skillful refresh`. Defaults to true. */
+  includeCachedCapabilities?: boolean;
+  /** Override used by tests and diagnostics. */
+  capabilityCachePath?: string;
 }
 
 /**
@@ -43,6 +53,7 @@ export async function scanCatalog(options: ScanOptions = {}): Promise<Catalog> {
   const ctx: ScanContext = { homeDir, cwd, projectDir, env };
   const warnings: string[] = [];
   const collected: CatalogEntry[] = [];
+  const mcpInventoryRuntimes = new Set<CatalogRuntime>();
 
   const wanted = options.runtimes ?? ALL_SOURCES.map((source) => source.runtime);
   for (const source of ALL_SOURCES) {
@@ -55,6 +66,21 @@ export async function scanCatalog(options: ScanOptions = {}): Promise<Catalog> {
     }
   }
 
+  if (options.includeCachedCapabilities !== false) {
+    const cachePath =
+      options.capabilityCachePath ??
+      defaultCapabilityCachePath(homeDir, options.env ?? process.env);
+    const cached = readCapabilityEntries(cachePath, {
+      ...(options.runtimes === undefined ? {} : { runtimes: options.runtimes }),
+      workspaceKey: projectDir === null ? undefined : workspaceHash(projectDir),
+    });
+    collected.push(...cached.entries);
+    warnings.push(...cached.warnings);
+    for (const runtime of cached.mcpInventoryRuntimes) mcpInventoryRuntimes.add(runtime);
+  }
+
+  hideMcpServerFallbacks(collected, mcpInventoryRuntimes);
+
   const entries = normalise(collected);
   return {
     entries,
@@ -63,7 +89,23 @@ export async function scanCatalog(options: ScanOptions = {}): Promise<Catalog> {
   };
 }
 
-export { findProjectRoot, catalogFingerprint };
+function hideMcpServerFallbacks(
+  entries: CatalogEntry[],
+  mcpInventoryRuntimes: ReadonlySet<CatalogRuntime>,
+): void {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.kind === "mcp" && mcpInventoryRuntimes.has(entry.runtime)) {
+      entries.splice(index, 1);
+    }
+  }
+}
+
+function workspaceHash(projectDir: string): string {
+  return createHash("sha256").update(path.resolve(projectDir)).digest("hex").slice(0, 16);
+}
+
+export { catalogFingerprint, findProjectRoot };
 
 /** Deduplicate and order entries so the output is reproducible. */
 function normalise(entries: readonly CatalogEntry[]): CatalogEntry[] {

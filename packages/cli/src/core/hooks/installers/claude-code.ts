@@ -13,7 +13,8 @@
 
 import path from "node:path";
 import type { CatalogRuntime } from "../../catalog/types.js";
-import { installJsonHook, uninstallJsonHook, type JsonHookSpec } from "./json-hook.js";
+import { claudeConfigDir } from "../../claude-config.js";
+import { installJsonHook, type JsonHookSpec, uninstallJsonHook } from "./json-hook.js";
 import type { InstallContext, InstallOutcome, UninstallOutcome } from "./types.js";
 
 const RUNTIME: CatalogRuntime = "claude-code";
@@ -21,8 +22,8 @@ const RUNTIME: CatalogRuntime = "claude-code";
 function spec(ctx: InstallContext): JsonHookSpec {
   return {
     runtime: RUNTIME,
-    target: path.join(ctx.homeDir, ".claude", "settings.json"),
-    event: "UserPromptSubmit",
+    target: path.join(claudeConfigDir(ctx.homeDir, ctx.env), "settings.json"),
+    events: ["UserPromptSubmit", "SessionStart", "PostCompact"],
   };
 }
 

@@ -17,10 +17,17 @@ import {
   type HookEntry,
   readJsonFile,
   removeSkillfulEntries,
-  upsertSkillfulEntry,
+  upsertSkillfulEntries,
   writeJsonAtomic,
 } from "../json-merge.js";
-import { hookCommand, type InstallContext, type InstallOutcome, type UninstallOutcome } from "./types.js";
+import {
+  hookCommand,
+  type InstallContext,
+  type InstallOutcome,
+  refreshCommand,
+  reminderCommand,
+  type UninstallOutcome,
+} from "./types.js";
 
 interface HookSettings {
   hooks?: Record<string, HookEntry[]>;
@@ -31,15 +38,46 @@ export interface JsonHookSpec {
   runtime: CatalogRuntime;
   /** Absolute path of the JSON file to modify. */
   target: string;
-  /** Event name, for example `UserPromptSubmit`. */
-  event: string;
+  /** Events managed as one atomic configuration update. */
+  events: readonly string[];
   /** Extra lines appended to the install notes, for runtime-specific caveats. */
   notes?: readonly string[];
 }
 
-/** Our entry: match every prompt, run the hook command. */
-function ourEntry(ctx: InstallContext): HookEntry {
-  return { matcher: "*", hooks: [{ type: "command", command: hookCommand(ctx) }] };
+/** Our entries for one runtime event. Claude has a two-stage PostCompact reminder handoff. */
+function ourEntries(ctx: InstallContext, runtime: CatalogRuntime, event: string): HookEntry[] {
+  if (runtime === "claude-code" && event === "PostCompact") {
+    return [
+      {
+        matcher: "manual|auto",
+        hooks: [{ type: "command", command: reminderCommand(ctx), timeout: 3 }],
+      },
+    ];
+  }
+  if (event === "SessionStart") {
+    const entries: HookEntry[] = [
+      {
+        matcher: "startup|resume|clear",
+        hooks: [
+          {
+            type: "command",
+            command: refreshCommand(ctx, runtime),
+            async: true,
+            timeout: 900,
+            statusMessage: "Refreshing Skillful capabilities",
+          },
+        ],
+      },
+    ];
+    if (runtime === "claude-code") {
+      entries.push({
+        matcher: "resume|compact",
+        hooks: [{ type: "command", command: reminderCommand(ctx), timeout: 3 }],
+      });
+    }
+    return entries;
+  }
+  return [{ matcher: "*", hooks: [{ type: "command", command: hookCommand(ctx, runtime) }] }];
 }
 
 /**
@@ -50,7 +88,7 @@ function ourEntry(ctx: InstallContext): HookEntry {
 function readHooksTable(
   spec: JsonHookSpec,
   notes: string[],
-): { settings: HookSettings; entries: HookEntry[] } | null {
+): { settings: HookSettings; entries: Map<string, HookEntry[]> } | null {
   const read = readJsonFile<HookSettings>(spec.target);
   if (read.error !== undefined) {
     notes.push(read.error);
@@ -62,20 +100,23 @@ function readHooksTable(
 
   if (hooks === undefined || hooks === null) {
     settings.hooks = {};
-    return { settings, entries: [] };
+    return { settings, entries: new Map(spec.events.map((event) => [event, []])) };
   }
   if (typeof hooks !== "object" || Array.isArray(hooks)) {
     notes.push(`${spec.target} has a "hooks" key that is not an object. Leaving it untouched.`);
     return null;
   }
 
-  const existing = hooks[spec.event];
-  if (existing !== undefined && !Array.isArray(existing)) {
-    notes.push(`${spec.target} has hooks.${spec.event} that is not an array. Leaving it untouched.`);
-    return null;
+  const entries = new Map<string, HookEntry[]>();
+  for (const event of spec.events) {
+    const existing = hooks[event];
+    if (existing !== undefined && !Array.isArray(existing)) {
+      notes.push(`${spec.target} has hooks.${event} that is not an array. Leaving it untouched.`);
+      return null;
+    }
+    entries.set(event, Array.isArray(existing) ? existing : []);
   }
-
-  return { settings, entries: Array.isArray(existing) ? existing : [] };
+  return { settings, entries };
 }
 
 export function installJsonHook(ctx: InstallContext, spec: JsonHookSpec): InstallOutcome {
@@ -83,10 +124,20 @@ export function installJsonHook(ctx: InstallContext, spec: JsonHookSpec): Instal
 
   const table = readHooksTable(spec, notes);
   if (table === null) {
-    return { runtime: spec.runtime, action: "skipped", target: spec.target, notes, error: notes.at(-1) };
+    return {
+      runtime: spec.runtime,
+      action: "skipped",
+      target: spec.target,
+      notes,
+      error: notes.at(-1),
+    };
   }
 
-  const { entries, changed, replaced } = upsertSkillfulEntry(table.entries, ourEntry(ctx));
+  const updates = spec.events.map((event) => ({
+    event,
+    ...upsertSkillfulEntries(table.entries.get(event) ?? [], ourEntries(ctx, spec.runtime, event)),
+  }));
+  const changed = updates.some((update) => update.changed);
 
   if (!changed) {
     notes.push("Skillful hook already present and current.");
@@ -94,14 +145,15 @@ export function installJsonHook(ctx: InstallContext, spec: JsonHookSpec): Instal
   }
 
   if (ctx.dryRun === true) {
-    notes.push(`Would write ${entries.length} ${spec.event} entr${entries.length === 1 ? "y" : "ies"}.`);
+    notes.push(`Would update Skillful hooks for ${spec.events.join(", ")}.`);
     return { runtime: spec.runtime, action: "installed", target: spec.target, notes };
   }
 
   let backup: string | undefined;
   try {
     backup = backupFile(spec.target, ctx.stamp) ?? undefined;
-    table.settings.hooks = { ...table.settings.hooks, [spec.event]: entries };
+    table.settings.hooks = { ...table.settings.hooks };
+    for (const update of updates) table.settings.hooks[update.event] = update.entries;
     writeJsonAtomic(spec.target, table.settings);
   } catch (error) {
     return {
@@ -113,6 +165,7 @@ export function installJsonHook(ctx: InstallContext, spec: JsonHookSpec): Instal
     };
   }
 
+  const replaced = updates.reduce((sum, update) => sum + update.replaced, 0);
   if (replaced > 0) {
     notes.push(`Replaced ${replaced} previous Skillful entr${replaced === 1 ? "y" : "ies"}.`);
   }
@@ -142,8 +195,11 @@ export function uninstallJsonHook(ctx: InstallContext, spec: JsonHookSpec): Unin
   }
 
   const settings: HookSettings = read.data ?? {};
-  const existing = settings.hooks?.[spec.event];
-  const { entries, removed } = removeSkillfulEntries(Array.isArray(existing) ? existing : []);
+  const updates = spec.events.map((event) => {
+    const existing = settings.hooks?.[event];
+    return { event, ...removeSkillfulEntries(Array.isArray(existing) ? existing : []) };
+  });
+  const removed = updates.reduce((sum, update) => sum + update.removed, 0);
 
   if (removed === 0) {
     return {
@@ -163,11 +219,12 @@ export function uninstallJsonHook(ctx: InstallContext, spec: JsonHookSpec): Unin
   try {
     backup = backupFile(spec.target, ctx.stamp) ?? undefined;
     if (settings.hooks !== undefined) {
-      settings.hooks = { ...settings.hooks, [spec.event]: entries };
+      settings.hooks = { ...settings.hooks };
+      for (const update of updates) settings.hooks[update.event] = update.entries;
     }
     // The backup is taken above, so by the time the file is unlinked the original content is
     // already preserved on disk.
-    pruneEmptyContainers(settings, spec.event, spec.target, notes);
+    for (const event of spec.events) pruneEmptyContainers(settings, event, spec.target, notes);
     if (Object.keys(settings).length > 0) {
       writeJsonAtomic(spec.target, settings);
     }

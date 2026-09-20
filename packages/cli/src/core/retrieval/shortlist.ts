@@ -6,8 +6,8 @@
  * mention the servers. Quotas fix the composition of what the model sees.
  */
 
-import { rankBm25, type ScoredDoc } from "./bm25.js";
 import type { CatalogEntry, CatalogKind, CatalogRuntime } from "../catalog/types.js";
+import { rankBm25, type ScoredDoc } from "./bm25.js";
 
 /**
  * A quota applies to a set of kinds that compete for the same slots.
@@ -22,7 +22,8 @@ export interface QuotaGroup {
 
 export const DEFAULT_QUOTA_GROUPS: readonly QuotaGroup[] = [
   { kinds: ["skill"], limit: 6 },
-  { kinds: ["mcp"], limit: 4 },
+  { kinds: ["mcp-tool", "mcp"], limit: 8 },
+  { kinds: ["cli-command"], limit: 8 },
   { kinds: ["agent"], limit: 3 },
   { kinds: ["command", "rule"], limit: 2 },
 ];
@@ -129,7 +130,7 @@ export function buildShortlist(
   // Groups are already in quota order, so ranking the combined list would reorder them.
   // Best-scoring first is the more useful presentation for `--explain`, and the model
   // receives candidates in a stable request order regardless.
-  selected.sort((x, y) => (y.score - x.score) || (x.id < y.id ? -1 : 1));
+  selected.sort((x, y) => y.score - x.score || (x.id < y.id ? -1 : 1));
 
   return { entries: selected, groups: groupResults };
 }
@@ -142,7 +143,13 @@ export function buildShortlist(
  * string read from a config file, while its name says what it is.
  */
 export function searchableText(entry: CatalogEntry): string {
-  return `${entry.name} ${entry.description} ${entry.whenToUse ?? ""}`.trim();
+  const provider =
+    entry.details?.type === "mcp-tool"
+      ? `${entry.details.client} ${entry.details.server} ${entry.details.tool} ${entry.details.canonicalName}`
+      : entry.details?.type === "cli-command"
+        ? entry.details.invocationHint
+        : "";
+  return `${entry.name} ${entry.description} ${entry.whenToUse ?? ""} ${provider}`.trim();
 }
 
 /**
@@ -176,7 +183,13 @@ function collapseIndistinguishable(
 
     // Kind is part of the key: a skill and an MCP server described the same way are still
     // different things and must both be offered.
-    const key = `${entry.kind}\u0000${entry.description}`;
+    // Only skills have a deliberate cross-runtime equivalence: the same skill is commonly
+    // installed under both ~/.claude and ~/.agents. Exact MCP tools and CLI commands retain
+    // their runtime/provider identity even when their human descriptions are byte-identical.
+    const key =
+      entry.kind === "skill"
+        ? `${entry.kind}\u0000${entry.description}`
+        : `${entry.kind}\u0000${entry.id}`;
     const existing = seen.get(key);
 
     if (existing === undefined) {

@@ -7,7 +7,15 @@
  * shape so the router can treat them uniformly.
  */
 
-export const CATALOG_KINDS = ["skill", "mcp", "agent", "command", "rule"] as const;
+export const CATALOG_KINDS = [
+  "skill",
+  "mcp",
+  "mcp-tool",
+  "cli-command",
+  "agent",
+  "command",
+  "rule",
+] as const;
 export type CatalogKind = (typeof CATALOG_KINDS)[number];
 
 export const CATALOG_RUNTIMES = ["claude-code", "codex", "pi", "omp"] as const;
@@ -15,6 +23,37 @@ export type CatalogRuntime = (typeof CATALOG_RUNTIMES)[number];
 
 export const CATALOG_SCOPES = ["global", "project"] as const;
 export type CatalogScope = (typeof CATALOG_SCOPES)[number];
+
+export type CapabilityAvailability = "available" | "stale" | "disabled" | "unknown";
+
+export interface McpToolDetails {
+  type: "mcp-tool";
+  client: Extract<CatalogRuntime, "codex" | "claude-code">;
+  server: string;
+  tool: string;
+  /** Host-specific scope and origin key. It is intentionally more precise than CatalogScope. */
+  scopeKey: string;
+  configOrigin: string;
+  canonicalName: string;
+  availability: CapabilityAvailability;
+  observedAt: string;
+}
+
+export interface CliCommandDetails {
+  type: "cli-command";
+  executablePath: string;
+  executableRealPath: string;
+  commandPath: string[];
+  invocationHint: string;
+  metadataSource: "basename" | "help" | "carapace" | "homebrew-completion" | "zsh-completion";
+  installManager?: "homebrew" | "uv" | "pnpm" | "npm" | "bun";
+  packageName?: string;
+  version?: string;
+  availability: CapabilityAvailability;
+  observedAt: string;
+}
+
+export type CatalogEntryDetails = McpToolDetails | CliCommandDetails;
 
 export interface CatalogEntry {
   /**
@@ -46,6 +85,8 @@ export interface CatalogEntry {
   degraded?: boolean;
   /** Kind-specific extras such as an MCP server command or URL. */
   meta?: Record<string, string>;
+  /** Typed locator for discovered CLI commands and concrete MCP tools. */
+  details?: CatalogEntryDetails;
 }
 
 export interface ScanContext {

@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Use [GitHub's private advisory form](https://github.com/bestagentkits/jev-skillful/security/advisories/new).
+Use [GitHub's private advisory form](https://github.com/kkluzek/jev-skillful/security/advisories/new).
 Please do not open a public issue for a vulnerability.
 
 Include what you did, what happened, and what you expected. A proof of concept is welcome.
@@ -34,8 +34,17 @@ task. The request carries the shortlisted capability names and descriptions alon
 - Set `SKILLFUL_UPLOAD_PROMPT=false` to withhold the prompt text. The shortlist is still chosen
   locally from your prompt, so routing quality drops; nothing else changes.
 - The prompt is truncated before it is sent.
-- This is the only outbound network call Skillful makes. There is no telemetry, no analytics, no
-  phone-home, and no update check.
+- A session-start capability refresh is limited to the selected runtime. Codex is queried through
+  an ephemeral App Server thread for the current project. Claude Code is queried through its own
+  effective init inventory with hooks disabled; the child is terminated when init arrives, before
+  model inference. This preserves the client's connector/OAuth boundary without copying tokens.
+  The fail-closed config fallback may send MCP initialize plus `tools/list` only to configured and
+  approved servers. Skillful never calls a tool and never sends the user's prompt to MCP.
+- CLI discovery runs only Homebrew, uv, pnpm, npm, Bun and Carapace as metadata providers, and
+  passively reads existing Homebrew/zsh completion files. It does not enumerate or execute
+  arbitrary PATH entries. A small allowlist can be enriched with recursive `--help` only inside a
+  no-network, write-restricted macOS sandbox.
+- There is no telemetry, analytics, phone-home, or update check.
 
 The API key is read from `TYPESAFE_API_KEY` and nowhere else. A config file that contains a
 credential-shaped key is rejected with a warning, because a key written into a file should be
@@ -43,8 +52,9 @@ treated as leaked.
 
 ### Configuration files
 
-`skillful install` modifies `~/.claude/settings.json` and `~/.codex/hooks.json`, both of which other
-tools write to. The protections are:
+`skillful install` modifies `$CLAUDE_CONFIG_DIR/settings.json` (falling back to
+`~/.claude/settings.json`) and `~/.codex/hooks.json`, both of which other tools write to. The
+protections are:
 
 - A timestamped backup before any modification.
 - A file that cannot be parsed is reported and left alone. It is never overwritten.
@@ -69,7 +79,7 @@ and the catalog fingerprint. It is written with mode `0600`.
 - It never stores prompt text.
 - It never stores an API key or any credential.
 - It can be deleted at any time; the next prompt simply misses the cache.
-- A corrupt cache file is treated as empty rather than as an error.
+- A corrupt route cache is treated as empty rather than as an error.
 
 ### Exported cases
 
@@ -79,6 +89,38 @@ credential shapes, URL credentials, and email addresses are removed. Tests asser
 the exact strings a real machine produces.
 
 The redaction is a filter, and a filter can miss something. Read the output before posting it.
+
+### The capability cache
+
+`~/.cache/skillful/capabilities-v2.json` stores exact MCP tool names/descriptions and installed CLI
+command trees. It may contain local executable and configuration paths, so it is written `0600`.
+It never stores MCP credentials or tool schemas. Failed refreshes retain the last known inventory
+as explicitly stale diagnostic evidence instead of silently replacing it with an empty list; stale
+entries are not offered to the router.
+
+A missing capability cache starts empty. A corrupt or unreadable capability cache suppresses broad
+MCP fallbacks and remains fail-closed for every client until that client's exact inventory is
+refreshed, including when the first repair is only a partial or CLI-only refresh.
+
+The Codex App Server process receives `SKILLFUL_DISCOVERY_NESTED=1`, and a refresh started from its
+ephemeral thread exits immediately. This prevents the session-start hook from recursively starting
+another inventory process. Discovery requests status and tool metadata only; it never starts an
+agent turn or invokes a returned tool.
+
+### Reminder data
+
+The Claude reminder layer reads only the configured Claude memory/rule files and the project-root
+`CLAUDE.md`; it never writes them. Its index cache and per-session pending/deduplication state are
+created with private permissions. The local JSONL decision log records the bounded query,
+candidate IDs and scores so retrieval can be audited. That query can contain private task text.
+It is never telemetry, but it must be protected like shell history and may be deleted at any time.
+A private cache-side marker carries a `PostCompact` persistence failure to the next supported
+`SessionStart`. Delivery is acknowledged only after stdout flushes, preferring a possible duplicate
+after a crash over silent loss.
+
+The bounded query and candidate excerpts are sent to TypeSafe for Jev relevance decisions. Set
+`SKILLFUL_UPLOAD_PROMPT=false` to prevent that transmission; reminder selection then fails open
+with an explicit status instead of falling back to an unauthenticated or local guess.
 
 ## Supported versions
 

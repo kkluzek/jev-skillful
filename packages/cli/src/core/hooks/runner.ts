@@ -17,12 +17,21 @@
  * outcome benchmark uses in phase 7.
  */
 
-import type { Catalog, CatalogEntry } from "../catalog/types.js";
-import { resolveConfig, type ResolvedConfig } from "../config/resolve.js";
-import { route, type RouteResult } from "../router/route.js";
+import type { Catalog, CatalogEntry, CatalogRuntime } from "../catalog/types.js";
+import { type ResolvedConfig, resolveConfig } from "../config/resolve.js";
+import { type RouteResult, route } from "../router/route.js";
 import { eventsPath, type PathContext } from "../telemetry/paths.js";
 import { buildRouteEvent, isTelemetryDisabled, writeEvent } from "../telemetry/writer.js";
-import { DEFAULT_MAX_ENTRIES, DEFAULT_TTL_MS, loadCache, pruneCache, routeCacheKey, saveCache, cacheGet, cacheSet } from "./cache.js";
+import {
+  cacheGet,
+  cacheSet,
+  DEFAULT_MAX_ENTRIES,
+  DEFAULT_TTL_MS,
+  loadCache,
+  pruneCache,
+  routeCacheKey,
+  saveCache,
+} from "./cache.js";
 import { DEGRADED_REMINDER, degradedReminder } from "./degrade.js";
 import { renderInjection } from "./render.js";
 
@@ -31,9 +40,11 @@ export const DISABLE_ENV = "SKILLFUL_DISABLE";
 
 export interface HookInput {
   prompt: string;
+  runtime?: CatalogRuntime;
   session_id?: string;
   cwd?: string;
   hook_event_name?: string;
+  transcript_path?: string;
 }
 
 /** The stdout shape Claude Code and Codex both accept. */
@@ -49,7 +60,13 @@ export interface HookDeps {
   cwd: string;
   env: Readonly<Record<string, string | undefined>>;
   /** Injected so tests never touch the real machine. */
-  scan: (options: { homeDir: string; cwd: string; env: Readonly<Record<string, string | undefined>> }) => Promise<Catalog>;
+  scan: (options: {
+    homeDir: string;
+    cwd: string;
+    env: Readonly<Record<string, string | undefined>>;
+    runtimes?: readonly CatalogRuntime[];
+    includeCachedCapabilities?: boolean;
+  }) => Promise<Catalog>;
   /** Injected so tests can supply recorded responses. */
   routeFn?: typeof route;
   /** Route cache location. Defaults to `~/.cache/skillful/routes.json`. */
@@ -157,7 +174,13 @@ export async function runHook(input: HookInput, deps: HookDeps): Promise<HookOut
 
     let catalog: Catalog;
     try {
-      catalog = await deps.scan({ homeDir: deps.homeDir, cwd: deps.cwd, env: deps.env });
+      catalog = await deps.scan({
+        homeDir: deps.homeDir,
+        cwd: deps.cwd,
+        env: deps.env,
+        ...(input.runtime === undefined ? {} : { runtimes: [input.runtime] }),
+        includeCachedCapabilities: input.runtime !== undefined,
+      });
     } catch (error) {
       return empty(`catalog scan failed: ${(error as Error).message}`, true);
     }

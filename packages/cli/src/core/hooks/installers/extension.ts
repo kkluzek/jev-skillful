@@ -53,7 +53,7 @@ export function installExtension(ctx: InstallContext, spec: ExtensionSpec): Inst
   const entry = path.join(target, "index.ts");
   const notes: string[] = [];
 
-  const body = extensionSource(ctx);
+  const body = extensionSource(ctx, spec.runtime);
 
   if (existsSync(entry)) {
     try {
@@ -85,7 +85,9 @@ export function installExtension(ctx: InstallContext, spec: ExtensionSpec): Inst
   }
 
   notes.push(`Wrote ${entry}`);
-  notes.push("Extensions run with your full user permissions. This one only spawns the Skillful CLI.");
+  notes.push(
+    "Extensions run with your full user permissions. This one only spawns the Skillful CLI.",
+  );
   return { runtime: spec.runtime, action: "installed", target, notes };
 }
 
@@ -94,7 +96,12 @@ export function uninstallExtension(ctx: InstallContext, spec: ExtensionSpec): Un
   const notes: string[] = [];
 
   if (!existsSync(target)) {
-    return { runtime: spec.runtime, action: "absent", target, notes: ["No Skillful extension found."] };
+    return {
+      runtime: spec.runtime,
+      action: "absent",
+      target,
+      notes: ["No Skillful extension found."],
+    };
   }
 
   if (ctx.dryRun === true) {

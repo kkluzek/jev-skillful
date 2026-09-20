@@ -1,8 +1,8 @@
 {
   "name": "@mrgoonie/skillful",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
-  "description": "Per-prompt capability router for coding agents. Injects at most one relevant skill, MCP server, subagent or command into your agent's context.",
+  "description": "Per-prompt capability router for coding agents. Routes to exact skills, MCP tools, CLI subcommands, agents and slash commands.",
   "license": "MIT",
   "bin": {
     "skillful": "./dist/bin.js"
@@ -27,13 +27,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bestagentkits/jev-skillful.git",
+    "url": "git+https://github.com/kkluzek/jev-skillful.git",
     "directory": "packages/cli"
   },
   "bugs": {
-    "url": "https://github.com/bestagentkits/jev-skillful/issues"
+    "url": "https://github.com/kkluzek/jev-skillful/issues"
   },
-  "homepage": "https://skillful.agentkit.best",
+  "homepage": "https://github.com/kkluzek/jev-skillful",
   "publishConfig": {
     "access": "public"
   },
@@ -44,5 +44,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "smol-toml": "1.7.1"
   }
 }

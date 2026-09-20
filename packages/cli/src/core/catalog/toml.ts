@@ -20,6 +20,7 @@ export interface TomlMcpServer {
   command?: string;
   args?: string[];
   url?: string;
+  enabled?: boolean;
 }
 
 const SECTION_PATTERN = /^\[([^\]]+)\]\s*$/;
@@ -68,6 +69,8 @@ export function parseMcpServersFromToml(text: string): TomlMcpServer[] {
     } else if (key === "args") {
       const value = asStringArray(rawValue);
       if (value !== null) current.args = value;
+    } else if (key === "enabled" && (rawValue === "true" || rawValue === "false")) {
+      current.enabled = rawValue === "true";
     }
   }
 
@@ -172,7 +175,6 @@ function asStringArray(value: string): string[] | null {
     }
     if (char === '"' || char === "'") {
       quote = char;
-      continue;
     }
   }
   return out;

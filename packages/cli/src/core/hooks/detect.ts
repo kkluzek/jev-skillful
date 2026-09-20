@@ -11,6 +11,7 @@
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { CatalogRuntime } from "../catalog/types.js";
+import { claudeConfigDir } from "../claude-config.js";
 
 export interface RuntimeLocation {
   runtime: CatalogRuntime;
@@ -37,11 +38,10 @@ export function runtimeLocations(
   homeDir: string,
   env: Readonly<Record<string, string | undefined>> = {},
 ): RuntimeLocation[] {
-  const claudeDir = path.join(homeDir, ".claude");
+  const claudeDir = claudeConfigDir(homeDir, env);
   const codexDir = env["CODEX_HOME"] ?? path.join(homeDir, ".codex");
   const piDir = env["PI_HOME"] ?? path.join(homeDir, ".pi", "agent");
-  const ompDir =
-    env["OMP_HOME"] ?? env["AGENTKIT_OMP_HOME"] ?? path.join(homeDir, ".omp", "agent");
+  const ompDir = env["OMP_HOME"] ?? env["AGENTKIT_OMP_HOME"] ?? path.join(homeDir, ".omp", "agent");
 
   return [
     {

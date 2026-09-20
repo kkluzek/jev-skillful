@@ -47,7 +47,8 @@ function trimFinalPeriod(text: string): string {
 /** `name — description`, with the description dropped when there is none. */
 function label(pick: RoutePick, descriptionLimit: number): string {
   const description = trimFinalPeriod(summarise(pick.description, descriptionLimit));
-  return description.length === 0 ? pick.name : `${pick.name} — ${description}`;
+  const name = pick.invocationHint ?? pick.name;
+  return description.length === 0 ? name : `${name} — ${description}`;
 }
 
 /**
@@ -70,10 +71,12 @@ export function renderInjection(result: RouteResult, options: RenderOptions = {}
   // single capability spends its whole budget describing that one capability.
   const descriptionLimit = runnersUp.length === 0 ? 180 : 140;
 
-  const lines: string[] = [`${INJECTION_PREFIX} Relevant capability: ${label(decision.primary, descriptionLimit)}.`];
+  const lines: string[] = [
+    `${INJECTION_PREFIX} Relevant capability: ${label(decision.primary, descriptionLimit)}.`,
+  ];
 
   if (runnersUp.length > 0) {
-    const names = runnersUp.map((pick) => pick.name).join(", ");
+    const names = runnersUp.map((pick) => pick.invocationHint ?? pick.name).join(", ");
     lines.push(`Also available: ${names}. Ignore if not relevant.`);
   }
 

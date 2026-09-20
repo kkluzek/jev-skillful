@@ -1,9 +1,11 @@
 import path from "node:path";
+import { claudeConfigDir, claudeStatePath } from "../../claude-config.js";
 import {
   collectMarkdownItems,
   collectMarkdownRecursive,
   collectSkillFiles,
   describeMcpServer,
+  readMarkdownItem,
   readMcpJsonFile,
   readSkillParts,
   serversFromRecord,
@@ -13,9 +15,9 @@ import {
   type CatalogEntry,
   type CatalogScope,
   type CatalogSource,
-  type ScanContext,
   catalogId,
   normaliseDescription,
+  type ScanContext,
 } from "../types.js";
 
 /**
@@ -24,22 +26,28 @@ import {
  * Verified layout under `~/.claude`:
  * - `skills/<name>/SKILL.md` with YAML frontmatter carrying `name` and `description`
  * - `agents/<name>.md`, `commands/**<name>.md`
- * - `plugins/**` when plugins ship their own skills
  *
- * MCP servers live outside that tree, in `~/.claude.json` as a `mcpServers` map plus
+ * MCP servers live outside that tree, in Claude's state JSON as a `mcpServers` map plus
  * a per-project `projects[<path>].mcpServers` map, and in a project-local `.mcp.json`.
  */
 
 interface ClaudeJson {
   mcpServers?: unknown;
-  projects?: Record<string, { mcpServers?: unknown }>;
+  projects?: Record<
+    string,
+    {
+      mcpServers?: unknown;
+      enabledMcpjsonServers?: unknown;
+      disabledMcpjsonServers?: unknown;
+    }
+  >;
 }
 
 export const claudeCodeSource: CatalogSource = {
   runtime: "claude-code",
   async scan(ctx) {
     const entries: CatalogEntry[] = [];
-    const globalRoot = path.join(ctx.homeDir, ".claude");
+    const globalRoot = claudeConfigDir(ctx.homeDir, ctx.env);
     const projectRoot = ctx.projectDir === null ? null : path.join(ctx.projectDir, ".claude");
 
     for (const [root, scope] of [
@@ -61,8 +69,7 @@ async function scanTree(
   _ctx: ScanContext,
   entries: CatalogEntry[],
 ): Promise<void> {
-  // A skill is a directory containing SKILL.md. Depth 3 covers `skills/<name>`;
-  // plugin caches nest deeper, so those get their own bounded walk below.
+  // A skill is a directory containing SKILL.md. Depth 3 covers `skills/<name>`.
   for (const skill of await collectSkillFiles(path.join(root, "skills"), { maxDepth: 2 })) {
     const item = await readSkillParts(skill.file, skill.dir);
     entries.push({
@@ -84,7 +91,9 @@ async function scanTree(
       kind: "agent",
       name: agent.name,
       description: agent.description,
-      ...(agent.whenToUse === undefined ? {} : { whenToUse: normaliseDescription(agent.whenToUse) }),
+      ...(agent.whenToUse === undefined
+        ? {}
+        : { whenToUse: normaliseDescription(agent.whenToUse) }),
       runtime: "claude-code",
       scope,
       sourcePath: agent.file,
@@ -95,44 +104,27 @@ async function scanTree(
   const commandsDir = path.join(root, "commands");
   for (const file of await collectMarkdownRecursive(commandsDir, { maxDepth: 2 })) {
     const relative = path.relative(commandsDir, file).replace(/\.md$/i, "");
-    const name = relative.split(path.sep).join(":");
+    const name = `/${relative.split(path.sep).join(":")}`;
+    const item = await readMarkdownItem(file);
     entries.push({
       id: catalogId("claude-code", "command", name, scope),
       kind: "command",
       name,
-      description: "",
+      description: item?.description ?? "",
+      ...(item?.whenToUse === undefined ? {} : { whenToUse: normaliseDescription(item.whenToUse) }),
       runtime: "claude-code",
       scope,
       sourcePath: file,
-    });
-  }
-
-  // Plugins can ship their own skills under a deeper cache layout.
-  for (const skill of await collectSkillFiles(path.join(root, "plugins"), {
-    maxDepth: 5,
-    limit: 500,
-  })) {
-    const item = await readSkillParts(skill.file, skill.dir);
-    entries.push({
-      id: catalogId("claude-code", "skill", item.name, scope),
-      kind: "skill",
-      name: item.name,
-      description: normaliseDescription(item.description),
-      ...(item.whenToUse === undefined ? {} : { whenToUse: normaliseDescription(item.whenToUse) }),
-      runtime: "claude-code",
-      scope,
-      sourcePath: skill.file,
-      meta: { via: "plugin" },
-      ...(item.degraded ? { degraded: true } : {}),
+      ...(item?.degraded === true ? { degraded: true } : {}),
     });
   }
 }
 
 async function scanMcp(ctx: ScanContext, entries: CatalogEntry[]): Promise<void> {
-  const claudeJsonPath = path.join(ctx.homeDir, ".claude.json");
+  const claudeJsonPath = claudeStatePath(ctx.homeDir, ctx.env);
   const claudeJson = await readJsonSafe<ClaudeJson>(claudeJsonPath);
 
-  // Global servers from ~/.claude.json.
+  // Global servers from Claude's configured state file.
   for (const server of serversFromRecord(claudeJson?.mcpServers)) {
     entries.push(mcpEntry(server, "global", claudeJsonPath));
   }
@@ -148,16 +140,27 @@ async function scanMcp(ctx: ScanContext, entries: CatalogEntry[]): Promise<void>
   // Project-local .mcp.json, the shared cross-client convention.
   if (ctx.projectDir !== null) {
     const projectMcp = path.join(ctx.projectDir, ".mcp.json");
+    const local = claudeJson?.projects?.[ctx.projectDir];
+    const enabled = new Set(stringArray(local?.enabledMcpjsonServers));
+    const disabled = new Set(stringArray(local?.disabledMcpjsonServers));
     for (const server of await readMcpJsonFile(projectMcp)) {
-      entries.push(mcpEntry(server, "project", projectMcp));
+      if (enabled.has(server.name) && !disabled.has(server.name)) {
+        entries.push(mcpEntry(server, "project", projectMcp));
+      }
     }
   }
 
   // ~/.claude/mcp.json is read by the shared MCP adapter ecosystem.
-  const claudeDirMcp = path.join(ctx.homeDir, ".claude", "mcp.json");
+  const claudeDirMcp = path.join(claudeConfigDir(ctx.homeDir, ctx.env), "mcp.json");
   for (const server of await readMcpJsonFile(claudeDirMcp)) {
     entries.push(mcpEntry(server, "global", claudeDirMcp));
   }
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function mcpEntry(

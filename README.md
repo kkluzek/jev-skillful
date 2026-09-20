@@ -1,8 +1,8 @@
 # Skillful
 
-A capability router for coding agents. It watches your prompts, decides whether a skill, MCP
-server, subagent or slash command you already have installed is relevant, and injects at most one
-suggestion into the agent's context.
+A capability router for coding agents. It watches your prompts, decides whether an installed
+skill, exact MCP tool, CLI subcommand, subagent or slash command is relevant, and injects at most
+one suggestion into the agent's context.
 
 ```bash
 npx @mrgoonie/skillful install
@@ -33,9 +33,19 @@ Your prompt
   │    miss → route within a 2000ms budget
   │    error or over budget → inject one reminder line, never fail the prompt
   │
-  ├─ Catalog scan (local, no tokens)
-  │    every capability on the machine, normalised
-  │    BM25 + per-kind quota → a shortlist of about 15
+  ├─ Session-start refresh (client-specific, asynchronous)
+│    exact MCP tools for this Codex or Claude Code configuration
+│    active Codex/Claude plugins and their exact skill/command names
+│    direct Homebrew/uv/npm/pnpm/Bun installs that have Carapace/Homebrew/zsh completion
+  │    Carapace export → bounded recursive command trees without running target CLIs
+  │
+  ├─ Claude reminder layer (resume and after compaction)
+  │    fixed memory/rule surfaces → weighted BM25 top 12 → one batched Jev gate
+  │    inject at most 3 titles/hooks; never inject a memory or rule body
+  │
+  ├─ Catalog scan (local, no tokens or child processes)
+  │    cached tools plus skills, agents and exact slash invocations, normalised
+  │    BM25 + per-kind quota → a bounded shortlist
   │
   ├─ One TypeSafe request
   │    a `choice` question over the shortlist plus `none`
@@ -46,7 +56,7 @@ Your prompt
 
 Two design choices are worth stating because they are deliberate:
 
-**The shortlist is what the model sees, not what gets injected.** Injecting all fifteen candidates
+**The shortlist is what the model sees, not what gets injected.** Injecting the whole shortlist
 on every prompt would reproduce the exact "enumerate every available skill" pattern that made
 retrieval necessary. The cap is one suggestion plus two alternatives.
 
@@ -90,7 +100,7 @@ suggestion actually makes an agent complete a task better is the question that m
 unanswered. The harness is complete — real SWE-bench tasks, frozen Docker environments, a paired
 analysis tested against hand-computed answers — and no `bench-outcome.json` exists, because none was
 fabricated. Two of four runtimes cannot complete a headless run here: Claude Code's OAuth session has
-expired and Codex's quota resets on 2026-09-19.
+expired and Codex was quota-limited on the measurement machine at the time.
 
 So the status is **not run**, which is not the same as `not-proven`. `not-proven` would mean the data
 was collected and the interval spans zero; here there is no interval at all. Until there is, this
@@ -113,8 +123,10 @@ number fell to its honest value. A retrieval result that depends on a leaked URL
   disturbs an agent session is worse than one that suggests nothing.
 - A cold route through the hook took 1446ms against a 2000ms budget; the same prompt again hit the
   cache in 221ms with byte-identical output; `thanks!` injected nothing.
-- Codex's quota on the development machine was exhausted until 2026-09-19, so a live Codex session
-  receiving an injection is not yet verified. The install itself is.
+- Session refresh is asynchronous. A newly started conversation never waits for discovery. Before
+  waiting for the shared cache lock, refresh publishes a fail-closed marker that immediately hides
+  affected old partitions; it then checkpoints and replaces completed partitions atomically. Stale
+  or failed entries remain diagnostic-only.
 
 ## Commands
 
@@ -124,6 +136,7 @@ npx @mrgoonie/skillful doctor               # is it working? includes a live tri
 npx @mrgoonie/skillful uninstall            # remove it, leaving other hooks alone
 
 npx @mrgoonie/skillful catalog --summary    # what capabilities were found
+npx @mrgoonie/skillful refresh --json       # refresh exact MCP tools and installed CLI commands
 npx @mrgoonie/skillful route --prompt "..." --explain   # the decision, with the shortlist and scores
 npx @mrgoonie/skillful eval --recall-only   # sweep quotas offline, no key and no cost
 npx @mrgoonie/skillful eval --replay FILE   # score against recorded responses, no key
@@ -132,12 +145,23 @@ npx @mrgoonie/skillful export-case --prompt "..."   # a redacted case to paste i
 
 ## Privacy
 
-- The prompt is sent to `api.typesafe.ai` as part of the routing request. This is the only kind of
-  network call Skillful makes.
+- The prompt is sent to `api.typesafe.ai` as part of the routing request.
+- At session start, Skillful refreshes only the selected runtime. Codex is queried through an
+  ephemeral App Server thread. Claude Code first performs a bounded `claude mcp list` health-check,
+  then is queried through its own effective `system/init`
+  inventory, which includes that client's managed connectors and OAuth state. The fixed inventory
+  probe disables hooks and is terminated as soon as init arrives, before model inference. A
+  fail-closed compatibility fallback may send MCP `initialize` and `tools/list` only to configured,
+  approved targets. Skillful never calls an MCP tool and never sends the user's prompt to MCP.
 - `SKILLFUL_UPLOAD_PROMPT=false` routes without transmitting the prompt. The shortlist is still
   chosen locally, so this trades retrieval quality for not sending the text.
 - Route decisions are cached in `~/.cache/skillful/routes.json` so a repeated prompt does not pay
   twice. The cache never stores your prompt and never stores a key.
+- Capability metadata is cached privately in `~/.cache/skillful/capabilities-v2.json`. It contains
+  names, descriptions and local source paths, but no MCP credentials.
+- Claude reminder indexes and per-session deduplication state are private local files. The reminder
+  decision log contains the observed query text and therefore is sensitive; see
+  [docs/reminder-layer.md](docs/reminder-layer.md) for paths, retention and disable controls.
 - Nothing is collected. There is no telemetry that leaves the machine.
 
 ## Security
@@ -156,6 +180,8 @@ injects it. Read it at `~/.pi/agent/extensions/skillful/index.ts` before trustin
 - [docs/measurement.md](docs/measurement.md) — the three layers, RAE, and how to read the dashboard
 - [docs/telemetry.md](docs/telemetry.md) — what is logged, what is never logged, and how to turn it off
 - [docs/bench.md](docs/bench.md) — the outcome benchmark, its evidence threshold, and its status
+- [docs/reminder-layer.md](docs/reminder-layer.md) — Claude memory/rule retrieval and its limits
+- [docs/reminder-retrieval-evaluation.md](docs/reminder-retrieval-evaluation.md) — observed BM25 gate results
 - [docs/troubleshooting.md](docs/troubleshooting.md) — when it does not work
 
 ## Contributing

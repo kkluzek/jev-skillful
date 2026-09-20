@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogEntry, CatalogKind } from "../catalog/types.js";
+import { renderInjection } from "../hooks/render.js";
 import type { SystemOneResponse } from "../jev/types.js";
-import { route } from "./route.js";
 import { PRIMARY_QUESTION_ID } from "./questions.js";
+import { route } from "./route.js";
 
 const TEST_KEY = "test-key-that-must-never-be-echoed";
 
@@ -19,7 +20,11 @@ function entry(name: string, kind: CatalogKind, description: string): CatalogEnt
 }
 
 const CATALOG: CatalogEntry[] = [
-  entry("ak-backend-development", "skill", "Build backends with Node.js, Python and Go. REST APIs and auth."),
+  entry(
+    "ak-backend-development",
+    "skill",
+    "Build backends with Node.js, Python and Go. REST APIs and auth.",
+  ),
   entry("ak-frontend-development", "skill", "Build React and TypeScript user interfaces."),
   entry("postgres", "mcp", "Query a PostgreSQL database."),
   entry("ak-copywriting", "skill", "Write conversion copy and headlines."),
@@ -81,11 +86,13 @@ describe("route — injected branch", () => {
   it("injects the chosen capability", async () => {
     const stub = stubFetch({
       responses: [
-        jsonResponse(response("pi:skill:global:ak-backend-development", {
-          none: 0,
-          "pi:skill:global:ak-backend-development": 0.9,
-          "pi:skill:global:ak-frontend-development": 0.1,
-        })),
+        jsonResponse(
+          response("pi:skill:global:ak-backend-development", {
+            none: 0,
+            "pi:skill:global:ak-backend-development": 0.9,
+            "pi:skill:global:ak-frontend-development": 0.1,
+          }),
+        ),
       ],
     });
 
@@ -129,10 +136,12 @@ describe("route — injected branch", () => {
   it("reports token usage and latency", async () => {
     const stub = stubFetch({
       responses: [
-        jsonResponse(response("pi:skill:global:ak-backend-development", {
-          none: 0,
-          "pi:skill:global:ak-backend-development": 0.9,
-        })),
+        jsonResponse(
+          response("pi:skill:global:ak-backend-development", {
+            none: 0,
+            "pi:skill:global:ak-backend-development": 0.9,
+          }),
+        ),
       ],
     });
 
@@ -180,7 +189,9 @@ describe("route — skipped branches", () => {
   it("skips when the model chooses none", async () => {
     const stub = stubFetch({
       responses: [
-        jsonResponse(response("none", { none: 0.97, "pi:skill:global:ak-backend-development": 0.03 })),
+        jsonResponse(
+          response("none", { none: 0.97, "pi:skill:global:ak-backend-development": 0.03 }),
+        ),
       ],
     });
 
@@ -191,10 +202,17 @@ describe("route — skipped branches", () => {
   it("skips when none loses the vote but crosses the threshold", async () => {
     const stub = stubFetch({
       responses: [
-        jsonResponse(response("pi:skill:global:ak-backend-development", {
-          none: 0.55,
-          "pi:skill:global:ak-backend-development": 0.45,
-        }, {}, 0.2)),
+        jsonResponse(
+          response(
+            "pi:skill:global:ak-backend-development",
+            {
+              none: 0.55,
+              "pi:skill:global:ak-backend-development": 0.45,
+            },
+            {},
+            0.2,
+          ),
+        ),
       ],
     });
 
@@ -207,13 +225,20 @@ describe("route — skipped branches", () => {
   it("skips a winner below the winner-probability floor", async () => {
     const stub = stubFetch({
       responses: [
-        jsonResponse(response("pi:skill:global:ak-backend-development", {
-          none: 0.1,
-          "pi:skill:global:ak-backend-development": 0.2,
-          "pi:skill:global:ak-frontend-development": 0.2,
-          postgres: 0.2,
-          "pi:skill:global:ak-copywriting": 0.2,
-        }, {}, 0.05)),
+        jsonResponse(
+          response(
+            "pi:skill:global:ak-backend-development",
+            {
+              none: 0.1,
+              "pi:skill:global:ak-backend-development": 0.2,
+              "pi:skill:global:ak-frontend-development": 0.2,
+              postgres: 0.2,
+              "pi:skill:global:ak-copywriting": 0.2,
+            },
+            {},
+            0.05,
+          ),
+        ),
       ],
     });
 
@@ -231,12 +256,19 @@ describe("route — skipped branches", () => {
     // that as no decision discarded correct picks.
     const stub = stubFetch({
       responses: [
-        jsonResponse(response("pi:skill:global:ak-backend-development", {
-          none: 0.05,
-          "pi:skill:global:ak-backend-development": 0.4,
-          "pi:skill:global:ak-frontend-development": 0.3,
-          postgres: 0.25,
-        }, {}, 0.15)),
+        jsonResponse(
+          response(
+            "pi:skill:global:ak-backend-development",
+            {
+              none: 0.05,
+              "pi:skill:global:ak-backend-development": 0.4,
+              "pi:skill:global:ak-frontend-development": 0.3,
+              postgres: 0.25,
+            },
+            {},
+            0.15,
+          ),
+        ),
       ],
     });
 
@@ -254,7 +286,10 @@ describe("route — skipped branches", () => {
       },
     });
 
-    const result = await route(BACKEND_PROMPT, { entries: [], jev: { apiKey: TEST_KEY, fetchImpl: stub } });
+    const result = await route(BACKEND_PROMPT, {
+      entries: [],
+      jev: { apiKey: TEST_KEY, fetchImpl: stub },
+    });
 
     expect(result.decision).toEqual({ kind: "skipped", reason: "empty-shortlist" });
     expect(called).toBe(false);
@@ -284,7 +319,13 @@ describe("route — degraded branches", () => {
   });
 
   it("degrades with network when fetch rejects", async () => {
-    const stub = stubFetch({ responses: [new Error("socket hang up"), new Error("socket hang up"), new Error("socket hang up")] });
+    const stub = stubFetch({
+      responses: [
+        new Error("socket hang up"),
+        new Error("socket hang up"),
+        new Error("socket hang up"),
+      ],
+    });
     const result = await routeWith(BACKEND_PROMPT, stub);
 
     expect(result.decision.kind).toBe("degraded");
@@ -303,7 +344,9 @@ describe("route — degraded branches", () => {
 
   it("degrades with malformed when the model picks an option it was not offered", async () => {
     const stub = stubFetch({
-      responses: [jsonResponse(response("not-a-real-candidate", { none: 0, "not-a-real-candidate": 1 }))],
+      responses: [
+        jsonResponse(response("not-a-real-candidate", { none: 0, "not-a-real-candidate": 1 })),
+      ],
     });
 
     const result = await routeWith(BACKEND_PROMPT, stub);
@@ -344,10 +387,12 @@ describe("route — retry behaviour", () => {
     const stub = (async () => {
       attempts += 1;
       if (attempts === 1) return jsonResponse({ error: "rate limited" }, 429);
-      return jsonResponse(response("pi:skill:global:ak-backend-development", {
-        none: 0,
-        "pi:skill:global:ak-backend-development": 0.9,
-      }));
+      return jsonResponse(
+        response("pi:skill:global:ak-backend-development", {
+          none: 0,
+          "pi:skill:global:ak-backend-development": 0.9,
+        }),
+      );
     }) as unknown as typeof fetch;
 
     const result = await routeWith(BACKEND_PROMPT, stub);
@@ -419,7 +464,9 @@ describe("route — credential safety", () => {
   });
 
   it("never puts the key in a network error message", async () => {
-    const stub = stubFetch({ responses: [new Error(`failed to connect using ${TEST_KEY}`), new Error("x"), new Error("y")] });
+    const stub = stubFetch({
+      responses: [new Error(`failed to connect using ${TEST_KEY}`), new Error("x"), new Error("y")],
+    });
     const result = await routeWith(BACKEND_PROMPT, stub);
 
     expect(JSON.stringify(result)).not.toContain(TEST_KEY);
@@ -514,7 +561,12 @@ describe("route — result contract", () => {
         jsonResponse({
           model: "jev-latest",
           answers: {
-            [PRIMARY_QUESTION_ID]: { type: "choice", choice: "none", probabilities: { none: 1 }, confidence: 1 },
+            [PRIMARY_QUESTION_ID]: {
+              type: "choice",
+              choice: "none",
+              probabilities: { none: 1 },
+              confidence: 1,
+            },
             c0: { type: "noul", noul: 0.2 },
           },
         }),
@@ -524,5 +576,138 @@ describe("route — result contract", () => {
     const result = await routeWith(BACKEND_PROMPT, stub);
     expect(result.decision.kind).toBe("skipped");
     expect(result.ranking.length).toBeGreaterThan(0);
+  });
+});
+
+describe("route — discovered exact capabilities", () => {
+  const exactEntries: CatalogEntry[] = [
+    {
+      id: "codex:cli-command:global:gh-repo-clone",
+      kind: "cli-command",
+      name: "gh repo clone",
+      description: "Clone a repository locally",
+      runtime: "codex",
+      scope: "global",
+      sourcePath: "/opt/homebrew/bin/gh",
+      details: {
+        type: "cli-command",
+        executablePath: "/opt/homebrew/bin/gh",
+        executableRealPath: "/opt/homebrew/Cellar/gh/bin/gh",
+        commandPath: ["gh", "repo", "clone"],
+        invocationHint: "gh repo clone",
+        metadataSource: "carapace",
+        installManager: "homebrew",
+        packageName: "gh",
+        availability: "available",
+        observedAt: "2026-09-20T10:00:00.000Z",
+      },
+    },
+    {
+      id: "codex:mcp-tool:effective:github-search-issues",
+      kind: "mcp-tool",
+      name: "mcp__codex_apps__github.search_issues",
+      description: "Search GitHub issues",
+      runtime: "codex",
+      scope: "project",
+      sourcePath: "codex-app-server:codex_apps/github",
+      details: {
+        type: "mcp-tool",
+        client: "codex",
+        server: "codex_apps/github",
+        tool: "search_issues",
+        scopeKey: "effective",
+        configOrigin: "codex-app-server",
+        canonicalName: "mcp__codex_apps__github.search_issues",
+        availability: "available",
+        observedAt: "2026-09-20T10:00:00.000Z",
+      },
+    },
+    {
+      id: "claude-code:mcp-tool:effective:qmd-query",
+      kind: "mcp-tool",
+      name: "mcp__qmd__query",
+      description: "Query the local knowledge base",
+      runtime: "claude-code",
+      scope: "project",
+      sourcePath: "claude-code:qmd",
+      details: {
+        type: "mcp-tool",
+        client: "claude-code",
+        server: "qmd",
+        tool: "query",
+        scopeKey: "effective",
+        configOrigin: "claude-code",
+        canonicalName: "mcp__qmd__query",
+        availability: "available",
+        observedAt: "2026-09-20T10:00:00.000Z",
+      },
+    },
+  ];
+
+  it.each([
+    ["clone a GitHub repository with gh repo clone", exactEntries[0]?.id],
+    ["search GitHub issues with the GitHub MCP tool", exactEntries[1]?.id],
+    ["query my local qmd knowledge base", exactEntries[2]?.id],
+  ])("can inject the exact discovered capability for %s", async (prompt, targetId) => {
+    if (targetId === undefined) throw new Error("missing test target");
+    const stub = stubFetch({
+      responses: [
+        jsonResponse(
+          response(targetId, {
+            none: 0,
+            [targetId]: 0.95,
+          }),
+        ),
+      ],
+    });
+
+    const result = await route(prompt, {
+      entries: exactEntries,
+      jev: { apiKey: TEST_KEY, fetchImpl: stub, sleepImpl: noSleep, maxRetries: 0 },
+    });
+
+    expect(result.shortlist).toContain(targetId);
+    expect(result.decision.kind).toBe("injected");
+    if (result.decision.kind !== "injected") throw new Error("expected injected");
+    expect(result.decision.primary.id).toBe(targetId);
+  });
+
+  it("carries a project-local executable hint through Jev selection into the hook message", async () => {
+    const targetId = "codex:cli-command:project:demo-run";
+    const invocationHint = "'/project with spaces/node_modules/.bin/demo' run";
+    const projectEntry: CatalogEntry = {
+      id: targetId,
+      kind: "cli-command",
+      name: "demo run",
+      description: "Run the project demo",
+      runtime: "codex",
+      scope: "project",
+      sourcePath: "/project with spaces/node_modules/.bin/demo",
+      details: {
+        type: "cli-command",
+        executablePath: "/project with spaces/node_modules/.bin/demo",
+        executableRealPath: "/project with spaces/node_modules/demo/cli.js",
+        commandPath: ["demo", "run"],
+        invocationHint,
+        metadataSource: "carapace",
+        installManager: "pnpm",
+        packageName: "demo",
+        availability: "available",
+        observedAt: "2026-09-20T10:00:00.000Z",
+      },
+    };
+    const stub = stubFetch({
+      responses: [jsonResponse(response(targetId, { none: 0, [targetId]: 0.99 }))],
+    });
+
+    const result = await route("run the project demo", {
+      entries: [projectEntry],
+      jev: { apiKey: TEST_KEY, fetchImpl: stub, sleepImpl: noSleep, maxRetries: 0 },
+    });
+
+    expect(result.decision.kind).toBe("injected");
+    if (result.decision.kind !== "injected") throw new Error("expected injected");
+    expect(result.decision.primary.invocationHint).toBe(invocationHint);
+    expect(renderInjection(result)).toContain(invocationHint);
   });
 });

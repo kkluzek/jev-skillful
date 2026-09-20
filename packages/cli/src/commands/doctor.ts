@@ -10,13 +10,18 @@
  * them.
  */
 
-import { isDisabled, DISABLE_ENV, defaultCachePath, resolveForReport } from "../core/hooks/runner.js";
-import { hookStatus } from "../core/hooks/install.js";
-import { loadCache } from "../core/hooks/cache.js";
-import { renderInjection } from "../core/hooks/render.js";
 import { scanCatalog } from "../core/catalog/scan.js";
-import { route } from "../core/router/route.js";
+import { loadCache } from "../core/hooks/cache.js";
+import { hookStatus } from "../core/hooks/install.js";
+import { renderInjection } from "../core/hooks/render.js";
+import {
+  DISABLE_ENV,
+  defaultCachePath,
+  isDisabled,
+  resolveForReport,
+} from "../core/hooks/runner.js";
 import { API_KEY_ENV } from "../core/jev/types.js";
+import { route } from "../core/router/route.js";
 
 export interface DoctorCommandOptions {
   homeDir?: string;
@@ -33,7 +38,12 @@ interface DoctorReport {
   runtimes: ReturnType<typeof hookStatus>;
   configPath: string;
   configWarnings: string[];
-  catalog: { entries: number; fingerprint: string; warnings: number } | null;
+  catalog: {
+    entries: number;
+    fingerprint: string;
+    warnings: number;
+    warningDetails: string[];
+  } | null;
   cache: { path: string; entries: number } | null;
   trial: { injected: boolean; latencyMs: number; decision: string; text: string | null } | null;
 }
@@ -90,14 +100,17 @@ export async function doctorCommand(options: DoctorCommandOptions = {}): Promise
       entries: scanned.entries.length,
       fingerprint: scanned.fingerprint.slice(0, 12),
       warnings: scanned.warnings.length,
+      warningDetails: scanned.warnings.slice(0, 50),
     };
     checks.push({
       name: "catalog",
-      status: scanned.entries.length > 0 ? "ok" : "warn",
+      status: scanned.entries.length > 0 && scanned.warnings.length === 0 ? "ok" : "warn",
       detail:
-        scanned.entries.length > 0
-          ? `${scanned.entries.length} capabilities found (${scanned.warnings.length} warnings).`
-          : "No capabilities found. Nothing can be routed until something is installed.",
+        scanned.entries.length > 0 && scanned.warnings.length > 0
+          ? `${scanned.entries.length} capabilities found; ${scanned.warnings.length} discovery warnings. First: ${scanned.warnings[0]}`
+          : scanned.entries.length > 0
+            ? `${scanned.entries.length} capabilities found.`
+            : "No capabilities found. Nothing can be routed until something is installed.",
     });
   } catch (error) {
     checks.push({
@@ -113,7 +126,11 @@ export async function doctorCommand(options: DoctorCommandOptions = {}): Promise
 
   let trial: DoctorReport["trial"] = null;
   if (options.offline === true) {
-    checks.push({ name: "live route", status: "skipped", detail: "--offline: trial route not run." });
+    checks.push({
+      name: "live route",
+      status: "skipped",
+      detail: "--offline: trial route not run.",
+    });
   } else if (!hasKey) {
     checks.push({
       name: "live route",
@@ -201,7 +218,10 @@ export function renderDoctor(report: DoctorReport): string {
   out.push("");
   out.push(`  Config file: ${report.configPath}`);
   if (report.catalog !== null) {
-    out.push(`  Catalog: ${report.catalog.entries} entries, fingerprint ${report.catalog.fingerprint}`);
+    out.push(
+      `  Catalog: ${report.catalog.entries} entries, fingerprint ${report.catalog.fingerprint}`,
+    );
+    for (const warning of report.catalog.warningDetails) out.push(`    warning: ${warning}`);
   }
   if (report.cache !== null) {
     out.push(`  Cache: ${report.cache.entries} entries at ${report.cache.path}`);

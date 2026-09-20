@@ -41,6 +41,28 @@ describe("catalogFingerprint", () => {
     expect(catalogFingerprint(before)).toBe(catalogFingerprint(after));
   });
 
+  it("changes when capability availability or invocation changes", () => {
+    const available = entry({
+      kind: "mcp-tool",
+      details: {
+        type: "mcp-tool",
+        client: "codex",
+        server: "github",
+        tool: "search",
+        scopeKey: "user",
+        configOrigin: "/config",
+        canonicalName: "mcp__github__search",
+        availability: "available",
+        observedAt: "2026-09-20T10:00:00.000Z",
+      },
+    });
+    const stale = {
+      ...available,
+      details: { ...available.details, availability: "stale" } as CatalogEntry["details"],
+    };
+    expect(catalogFingerprint([available])).not.toBe(catalogFingerprint([stale]));
+  });
+
   it("formats the digest with a sha256 prefix", () => {
     expect(catalogFingerprint([entry()])).toMatch(/^sha256:[0-9a-f]{64}$/);
   });

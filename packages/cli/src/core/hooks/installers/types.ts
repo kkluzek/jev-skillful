@@ -52,8 +52,18 @@ export interface UninstallOutcome {
  * The marker is passed as a plain argument, so it survives shell and non-shell invocation,
  * and it is what `json-merge.ts` looks for when deciding which entries are ours.
  */
-export function hookCommand(ctx: InstallContext): string {
-  return `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)} hook ${MARKER_ARG}`;
+export function hookCommand(ctx: InstallContext, runtime: CatalogRuntime): string {
+  return `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)} hook --runtime ${runtime} ${MARKER_ARG}`;
+}
+
+/** Refresh the runtime-specific MCP inventory and installed CLI index once per session. */
+export function refreshCommand(ctx: InstallContext, runtime: CatalogRuntime): string {
+  return `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)} refresh --runtime ${runtime} --quiet ${MARKER_ARG}`;
+}
+
+/** Run the Claude-only memory and rule reminder layer. */
+export function reminderCommand(ctx: InstallContext): string {
+  return `${quote(ctx.nodeBin)} ${quote(ctx.cliEntry)} remind ${MARKER_ARG}`;
 }
 
 /** Quoted the way both POSIX shells and Windows `cmd` accept. */

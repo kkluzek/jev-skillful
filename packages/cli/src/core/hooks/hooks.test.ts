@@ -11,23 +11,32 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { emptyCache, loadCache, pruneCache, routeCacheKey, saveCache, cacheGet, cacheSet, normalisePrompt } from "./cache.js";
+import type { Catalog } from "../catalog/types.js";
+import type { RouteResult } from "../router/route.js";
+import {
+  cacheGet,
+  cacheSet,
+  emptyCache,
+  loadCache,
+  normalisePrompt,
+  pruneCache,
+  routeCacheKey,
+  saveCache,
+} from "./cache.js";
 import { detectRuntimes, presentRuntimes, runtimeLocations } from "./detect.js";
+import { buildInstallContext, hookStatus, installHooks, uninstallHooks } from "./install.js";
 import {
   backupFile,
+  type HookEntry,
   isSkillfulEntry,
   readJsonFile,
   removeSkillfulEntries,
   SKILLFUL_HOOK_MARKER,
   upsertSkillfulEntry,
   writeJsonAtomic,
-  type HookEntry,
 } from "./json-merge.js";
 import { renderInjection } from "./render.js";
-import { buildInstallContext, installHooks, uninstallHooks, hookStatus } from "./install.js";
 import { isDisabled, runHook } from "./runner.js";
-import type { Catalog } from "../catalog/types.js";
-import type { RouteResult } from "../router/route.js";
 
 const tempDirs: string[] = [];
 
@@ -65,14 +74,23 @@ describe("json-merge", () => {
   });
 
   it("recognises only entries carrying the marker", () => {
-    expect(isSkillfulEntry({ hooks: [{ type: "command", command: "node skillful hook --managed-by-skillful" }] })).toBe(true);
+    expect(
+      isSkillfulEntry({
+        hooks: [{ type: "command", command: "node skillful hook --managed-by-skillful" }],
+      }),
+    ).toBe(true);
     // A different tool whose command merely contains the word "skillful" is not ours.
-    expect(isSkillfulEntry({ hooks: [{ type: "command", command: "node /opt/skillful-hooks/run.js" }] })).toBe(false);
+    expect(
+      isSkillfulEntry({ hooks: [{ type: "command", command: "node /opt/skillful-hooks/run.js" }] }),
+    ).toBe(false);
     expect(isSkillfulEntry({ hooks: [] })).toBe(false);
   });
 
   it("is idempotent: re-upserting the same entry reports no change", () => {
-    const entry: HookEntry = { matcher: "*", hooks: [{ type: "command", command: `node c ${SKILLFUL_HOOK_MARKER}` }] };
+    const entry: HookEntry = {
+      matcher: "*",
+      hooks: [{ type: "command", command: `node c ${SKILLFUL_HOOK_MARKER}` }],
+    };
 
     const first = upsertSkillfulEntry([], entry);
     expect(first.changed).toBe(true);
@@ -132,7 +150,14 @@ describe("json-merge", () => {
 const INJECTED: RouteResult = {
   decision: {
     kind: "injected",
-    primary: { id: "a:skill:g:x", kind: "skill", name: "x", description: "d", sourcePath: "/p", alternates: [] },
+    primary: {
+      id: "a:skill:g:x",
+      kind: "skill",
+      name: "x",
+      description: "d",
+      sourcePath: "/p",
+      alternates: [],
+    },
     runnersUp: [],
     confidence: 1,
     noneP: 0,
@@ -200,7 +225,11 @@ describe("cache", () => {
     expect(Object.keys(loadCache(file).entries)).toHaveLength(0);
 
     // A store from an older schema version is discarded rather than misread.
-    writeFileSync(file, JSON.stringify({ version: 99, entries: { a: { result: INJECTED, ts: 1 } } }), "utf8");
+    writeFileSync(
+      file,
+      JSON.stringify({ version: 99, entries: { a: { result: INJECTED, ts: 1 } } }),
+      "utf8",
+    );
     expect(Object.keys(loadCache(file).entries)).toHaveLength(0);
   });
 
@@ -225,7 +254,14 @@ describe("render", () => {
       ...INJECTED,
       decision: {
         kind: "injected",
-        primary: { id: "p", kind: "skill", name: "primary", description, sourcePath: "/p", alternates: [] },
+        primary: {
+          id: "p",
+          kind: "skill",
+          name: "primary",
+          description,
+          sourcePath: "/p",
+          alternates: [],
+        },
         runnersUp: Array.from({ length: runnersUp }, (_, i) => ({
           id: `r${i}`,
           kind: "skill" as const,
@@ -243,7 +279,9 @@ describe("render", () => {
 
   it("injects nothing when the decision is not an injection", () => {
     expect(renderInjection(DEGRADED)).toBeNull();
-    expect(renderInjection({ ...INJECTED, decision: { kind: "skipped", reason: "none-won" } })).toBeNull();
+    expect(
+      renderInjection({ ...INJECTED, decision: { kind: "skipped", reason: "none-won" } }),
+    ).toBeNull();
   });
 
   it("caps runner-ups at two even when more cleared the threshold", () => {
@@ -258,6 +296,15 @@ describe("render", () => {
     expect(text).toContain("primary");
     expect(text).not.toContain("Also available");
     expect(text?.split("\n")).toHaveLength(1);
+  });
+
+  it("renders the directly executable CLI invocation instead of a bare project bin name", () => {
+    const result = injectedWith(0);
+    if (result.decision.kind !== "injected") throw new Error("expected injected fixture");
+    result.decision.primary.kind = "cli-command";
+    result.decision.primary.invocationHint = "'/project/node_modules/.bin/demo tool' run";
+
+    expect(renderInjection(result)).toContain("'/project/node_modules/.bin/demo tool' run");
   });
 
   it("stays within the character budget on a long description", () => {
@@ -289,7 +336,15 @@ describe("detect", () => {
 
   it("honours environment overrides so hooks land where the scanner looks", () => {
     const home = makeHome();
-    const locations = runtimeLocations(home, { CODEX_HOME: "/custom/codex", OMP_HOME: "/custom/omp" });
+    const locations = runtimeLocations(home, {
+      CLAUDE_CONFIG_DIR: "/custom/claude",
+      CODEX_HOME: "/custom/codex",
+      OMP_HOME: "/custom/omp",
+    });
+    expect(locations.find((l) => l.runtime === "claude-code")?.configDir).toBe("/custom/claude");
+    expect(locations.find((l) => l.runtime === "claude-code")?.hookTarget).toBe(
+      "/custom/claude/settings.json",
+    );
     expect(locations.find((l) => l.runtime === "codex")?.configDir).toBe("/custom/codex");
     expect(locations.find((l) => l.runtime === "omp")?.configDir).toBe("/custom/omp");
     expect(locations.find((l) => l.runtime === "claude-code")?.mechanism).toBe("hook");
@@ -321,14 +376,67 @@ describe("installers", () => {
 
     const ctx = installContext(home);
     const first = installHooks(ctx);
-    expect(first.outcomes.map((o) => o.action)).toEqual(["installed", "installed", "installed", "installed"]);
+    expect(first.outcomes.map((o) => o.action)).toEqual([
+      "installed",
+      "installed",
+      "installed",
+      "installed",
+    ]);
 
     const second = installHooks(installContext(home));
-    expect(second.outcomes.map((o) => o.action)).toEqual(["unchanged", "unchanged", "unchanged", "unchanged"]);
+    expect(second.outcomes.map((o) => o.action)).toEqual([
+      "unchanged",
+      "unchanged",
+      "unchanged",
+      "unchanged",
+    ]);
 
     // The settings file must not accumulate duplicate entries.
     const settings = JSON.parse(readFileSync(path.join(home, ".claude", "settings.json"), "utf8"));
     expect(settings.hooks.UserPromptSubmit).toHaveLength(1);
+    expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toContain("--runtime claude-code");
+    expect(settings.hooks.SessionStart).toHaveLength(2);
+    expect(settings.hooks.SessionStart[0].matcher).toBe("startup|resume|clear");
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toContain(
+      "refresh --runtime claude-code",
+    );
+    expect(settings.hooks.SessionStart[0].hooks[0].async).toBe(true);
+    expect(settings.hooks.SessionStart[1].matcher).toBe("resume|compact");
+    expect(settings.hooks.SessionStart[1].hooks[0].command).toContain(" remind ");
+    expect(settings.hooks.PostCompact).toHaveLength(1);
+    expect(settings.hooks.PostCompact[0].matcher).toBe("manual|auto");
+
+    const codex = JSON.parse(readFileSync(path.join(home, ".codex", "hooks.json"), "utf8"));
+    expect(codex.hooks.UserPromptSubmit[0].hooks[0].command).toContain("--runtime codex");
+    expect(codex.hooks.SessionStart[0].hooks[0].command).toContain("refresh --runtime codex");
+    expect(codex.hooks.SessionStart[0].hooks[0].async).toBe(true);
+  });
+
+  it("installs the Claude hook under CLAUDE_CONFIG_DIR", () => {
+    const home = makeHome();
+    const configDir = path.join(home, "custom-claude");
+    mkdirSync(configDir, { recursive: true });
+    const ctx = buildInstallContext({
+      homeDir: home,
+      env: { HOME: home, CLAUDE_CONFIG_DIR: configDir },
+      cliEntry: "/opt/skillful/dist/bin.js",
+      nodeBin: "/usr/bin/node",
+      stamp: "20260101-000000",
+    });
+
+    const summary = installHooks(ctx, ["claude-code"]);
+
+    expect(summary.outcomes).toEqual([
+      expect.objectContaining({
+        runtime: "claude-code",
+        action: "installed",
+        target: path.join(configDir, "settings.json"),
+      }),
+    ]);
+    expect(
+      JSON.parse(readFileSync(path.join(configDir, "settings.json"), "utf8")).hooks.SessionStart,
+    ).toHaveLength(2);
+    expect(fsExists(path.join(home, ".claude", "settings.json"))).toBe(false);
   });
 
   it("leaves another tool's hooks untouched and removes only its own on uninstall", () => {
@@ -358,6 +466,62 @@ describe("installers", () => {
     uninstallHooks(installContext(home));
     const afterUninstall = JSON.parse(readFileSync(settingsPath, "utf8"));
     expect(afterUninstall).toEqual(original);
+  });
+
+  it("preserves an existing Claude PostCompact hook beside the reminder layer", () => {
+    const home = makeHome();
+    mkdirSync(path.join(home, ".claude"), { recursive: true });
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    const existing = {
+      matcher: "*",
+      hooks: [{ type: "command", command: "python3 /other/compact.py" }],
+    };
+    writeFileSync(settingsPath, JSON.stringify({ hooks: { PostCompact: [existing] } }), "utf8");
+
+    installHooks(installContext(home), ["claude-code"]);
+    const installed = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(installed.hooks.PostCompact).toHaveLength(2);
+    expect(installed.hooks.PostCompact[0]).toEqual(existing);
+    expect(installed.hooks.PostCompact[1].hooks[0].command).toContain(" remind ");
+
+    uninstallHooks(installContext(home), ["claude-code"]);
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+      hooks: { PostCompact: [existing] },
+    });
+  });
+
+  it("preserves a foreign command sharing an entry with an old Skillful command", () => {
+    const home = makeHome();
+    mkdirSync(path.join(home, ".claude"), { recursive: true });
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    const foreign = { type: "command", command: "python3 /other/shared.py", timeout: 7 };
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [
+            {
+              matcher: "shared",
+              customMetadata: "keep-me",
+              hooks: [
+                foreign,
+                { type: "command", command: "node /old/skillful.js --managed-by-skillful" },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    installHooks(installContext(home), ["claude-code"]);
+    uninstallHooks(installContext(home), ["claude-code"]);
+
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+      hooks: {
+        UserPromptSubmit: [{ matcher: "shared", customMetadata: "keep-me", hooks: [foreign] }],
+      },
+    });
   });
 
   it("leaves no trace when it was the only hook in the file", () => {
@@ -446,7 +610,11 @@ function fsExists(target: string): boolean {
 
 const EMPTY_CATALOG: Catalog = { entries: [], fingerprint: "fp-empty", warnings: [] };
 
-function deps(home: string, env: Record<string, string | undefined>, routeFn?: typeof import("../router/route.js").route) {
+function deps(
+  home: string,
+  env: Record<string, string | undefined>,
+  routeFn?: typeof import("../router/route.js").route,
+) {
   return {
     homeDir: home,
     cwd: home,
@@ -457,6 +625,48 @@ function deps(home: string, env: Record<string, string | undefined>, routeFn?: t
 }
 
 describe("runner", () => {
+  it("passes the active runtime into catalog scanning", async () => {
+    const home = makeHome();
+    let options: Record<string, unknown> | undefined;
+    await runHook(
+      { prompt: "refactor auth", runtime: "codex" },
+      {
+        ...deps(
+          home,
+          { TYPESAFE_API_KEY: "k" },
+          (async () => INJECTED) as typeof import("../router/route.js").route,
+        ),
+        scan: async (received) => {
+          options = received;
+          return EMPTY_CATALOG;
+        },
+      },
+    );
+    expect(options).toEqual(
+      expect.objectContaining({ runtimes: ["codex"], includeCachedCapabilities: true }),
+    );
+  });
+
+  it("fails closed for client-specific cache when an old hook has no runtime", async () => {
+    const home = makeHome();
+    let options: Record<string, unknown> | undefined;
+    await runHook(
+      { prompt: "refactor auth" },
+      {
+        ...deps(
+          home,
+          { TYPESAFE_API_KEY: "k" },
+          (async () => INJECTED) as typeof import("../router/route.js").route,
+        ),
+        scan: async (received) => {
+          options = received;
+          return EMPTY_CATALOG;
+        },
+      },
+    );
+    expect(options).toEqual(expect.objectContaining({ includeCachedCapabilities: false }));
+  });
+
   it("recognises the disable switch", () => {
     expect(isDisabled({ SKILLFUL_DISABLE: "1" })).toBe(true);
     expect(isDisabled({ SKILLFUL_DISABLE: "true" })).toBe(true);
@@ -486,7 +696,9 @@ describe("runner", () => {
   it("degrades to a reminder when no key is configured, without throwing", async () => {
     const outcome = await runHook({ prompt: "refactor the auth middleware" }, deps(makeHome(), {}));
     expect(outcome.degraded).toBe(true);
-    expect(outcome.payload.hookSpecificOutput?.additionalContext).toContain("npx @mrgoonie/skillful");
+    expect(outcome.payload.hookSpecificOutput?.additionalContext).toContain(
+      "npx @mrgoonie/skillful",
+    );
   });
 
   it("injects nothing for an empty prompt", async () => {
@@ -515,7 +727,10 @@ describe("runner", () => {
     const home = makeHome();
     const routeFn = (async () => INJECTED) as unknown as typeof import("../router/route.js").route;
 
-    const outcome = await runHook({ prompt: "refactor the auth middleware" }, deps(home, { TYPESAFE_API_KEY: "k" }, routeFn));
+    const outcome = await runHook(
+      { prompt: "refactor the auth middleware" },
+      deps(home, { TYPESAFE_API_KEY: "k" }, routeFn),
+    );
 
     expect(outcome.degraded).toBe(false);
     expect(outcome.payload.hookSpecificOutput?.additionalContext).toContain("x — d");
@@ -530,8 +745,14 @@ describe("runner", () => {
       return INJECTED;
     }) as unknown as typeof import("../router/route.js").route;
 
-    const first = await runHook({ prompt: "refactor the auth middleware" }, deps(home, { TYPESAFE_API_KEY: "k" }, routeFn));
-    const second = await runHook({ prompt: "Refactor  the auth middleware" }, deps(home, { TYPESAFE_API_KEY: "k" }, routeFn));
+    const first = await runHook(
+      { prompt: "refactor the auth middleware" },
+      deps(home, { TYPESAFE_API_KEY: "k" }, routeFn),
+    );
+    const second = await runHook(
+      { prompt: "Refactor  the auth middleware" },
+      deps(home, { TYPESAFE_API_KEY: "k" }, routeFn),
+    );
 
     expect(first.cacheHit).toBe(false);
     expect(second.cacheHit).toBe(true);
@@ -546,8 +767,14 @@ describe("runner", () => {
       return DEGRADED;
     }) as unknown as typeof import("../router/route.js").route;
 
-    await runHook({ prompt: "refactor the auth middleware" }, deps(home, { TYPESAFE_API_KEY: "k" }, routeFn));
-    await runHook({ prompt: "refactor the auth middleware" }, deps(home, { TYPESAFE_API_KEY: "k" }, routeFn));
+    await runHook(
+      { prompt: "refactor the auth middleware" },
+      deps(home, { TYPESAFE_API_KEY: "k" }, routeFn),
+    );
+    await runHook(
+      { prompt: "refactor the auth middleware" },
+      deps(home, { TYPESAFE_API_KEY: "k" }, routeFn),
+    );
 
     expect(calls).toBe(2);
   });
