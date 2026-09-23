@@ -17,12 +17,32 @@
  * outcome benchmark uses in phase 7.
  */
 
+import { createHash } from "node:crypto";
 import type { Catalog, CatalogEntry, CatalogRuntime } from "../catalog/types.js";
 import { type ResolvedConfig, resolveConfig } from "../config/resolve.js";
 import { resolveJevTarget } from "../jev/client.js";
 import { type RouteResult, route } from "../router/route.js";
 import { eventsPath, type PathContext } from "../telemetry/paths.js";
 import { buildRouteEvent, isTelemetryDisabled, writeEvent } from "../telemetry/writer.js";
+import {
+  ADAPTIVE_MAX_CHARS,
+  buildAdaptivePrompt,
+  capabilityWasUsed,
+  isAdaptiveDisabled,
+  observeBatch,
+  shouldRouteBatch,
+} from "./adaptive.js";
+import {
+  ADAPTIVE_STATE_VERSION,
+  type AdaptiveSessionState,
+  adaptiveStatePath,
+  adaptiveStateRoot,
+  pruneAdaptiveSessions,
+  readAdaptiveState,
+  removeAdaptiveSession,
+  type StoredCapability,
+  writeAdaptiveState,
+} from "./adaptive-state.js";
 import {
   cacheGet,
   cacheSet,
@@ -39,13 +59,24 @@ import { renderInjection } from "./render.js";
 /** Environment variable that turns the hook off entirely, with no other effect. */
 export const DISABLE_ENV = "SKILLFUL_DISABLE";
 
+export interface HookToolCall {
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  tool_use_id?: string;
+  tool_response?: unknown;
+}
+
 export interface HookInput {
   prompt: string;
   runtime?: CatalogRuntime;
   session_id?: string;
+  prompt_id?: string;
+  agent_id?: string;
+  agent_type?: string;
   cwd?: string;
   hook_event_name?: string;
   transcript_path?: string;
+  tool_calls?: HookToolCall[];
 }
 
 /** The stdout shape Claude Code and Codex both accept. */
@@ -90,6 +121,8 @@ export interface HookOutcome {
   /** Human-readable reason, for `doctor` and telemetry. Never printed by the hook. */
   reason?: string;
   elapsedMs: number;
+  /** Commit delivery-dependent dedupe only after stdout was flushed successfully. */
+  acknowledge?: () => void;
 }
 
 /**
@@ -132,6 +165,402 @@ function recordRoute(
   );
 }
 
+function promptId(input: HookInput, prompt: string): string {
+  return input.prompt_id?.trim() || createHash("sha256").update(prompt).digest("hex").slice(0, 32);
+}
+
+function adaptiveFile(
+  input: HookInput,
+  deps: HookDeps,
+  agentId: string | null | undefined = input.agent_id,
+): string | null {
+  if (input.runtime !== "claude-code" || (input.session_id?.trim() ?? "") === "") return null;
+  return adaptiveStatePath(
+    adaptiveStateRoot(deps.homeDir, deps.env),
+    input.session_id as string,
+    agentId === null ? undefined : agentId,
+  );
+}
+
+function beginPromptState(
+  input: HookInput,
+  deps: HookDeps,
+  prompt: string,
+  timestamp: number,
+): string | null {
+  const filePath = adaptiveFile(input, deps, null);
+  if (filePath === null) return null;
+  try {
+    pruneAdaptiveSessions(adaptiveStateRoot(deps.homeDir, deps.env), timestamp);
+  } catch {
+    // Cleanup is best effort and must not affect prompt routing.
+  }
+  const state: AdaptiveSessionState = {
+    version: ADAPTIVE_STATE_VERSION,
+    promptId: promptId(input, prompt),
+    goal: prompt.slice(0, 1_000),
+    updatedAt: timestamp,
+    batchCount: 0,
+    phase: "intent",
+    normalInterventions: 0,
+    recoveryInterventions: 0,
+    shownIds: [],
+    usedIds: [],
+  };
+  try {
+    writeAdaptiveState(filePath, state);
+    return filePath;
+  } catch {
+    return null;
+  }
+}
+
+function storedCapability(result: RouteResult): StoredCapability | null {
+  if (result.decision.kind !== "injected") return null;
+  const pick = result.decision.primary;
+  return {
+    id: pick.id,
+    kind: pick.kind,
+    name: pick.name,
+    description: pick.description,
+    sourcePath: pick.sourcePath,
+    ...(pick.invocationHint === undefined ? {} : { invocationHint: pick.invocationHint }),
+    confidence: result.primary?.confidence ?? result.decision.confidence,
+    noneP: result.primary?.noneP ?? result.decision.noneP,
+    probability: result.primary?.probability ?? 0,
+  };
+}
+
+function stagePromptRecommendation(
+  outcome: HookOutcome,
+  result: RouteResult,
+  filePath: string | null,
+  timestamp: number,
+): HookOutcome {
+  const capability = storedCapability(result);
+  if (filePath === null || capability === null) return outcome;
+  const state = readAdaptiveState(filePath);
+  if (state === null) return outcome;
+  try {
+    writeAdaptiveState(filePath, { ...state, primary: capability, updatedAt: timestamp });
+  } catch {
+    return outcome;
+  }
+  const previous = outcome.acknowledge;
+  return {
+    ...outcome,
+    acknowledge: () => {
+      previous?.();
+      const latest = readAdaptiveState(filePath);
+      if (latest === null || latest.promptId !== state.promptId) return;
+      if (!latest.shownIds.includes(capability.id)) latest.shownIds.push(capability.id);
+      latest.updatedAt = timestamp;
+      try {
+        writeAdaptiveState(filePath, latest);
+      } catch {
+        // Delivery succeeded; losing dedupe state must not disturb the host.
+      }
+    },
+  };
+}
+
+function emptyOutcome(
+  startedAt: number,
+  now: () => number,
+  reason: string,
+  degraded = false,
+): HookOutcome {
+  return {
+    payload: {},
+    cacheHit: false,
+    degraded,
+    reason,
+    elapsedMs: now() - startedAt,
+  };
+}
+
+function acknowledgeAdaptiveInjection(
+  filePath: string,
+  expectedPromptId: string,
+  capability: StoredCapability,
+  recovery: boolean,
+  now: () => number,
+): () => void {
+  return () => {
+    const latest = readAdaptiveState(filePath);
+    if (latest === null || latest.promptId !== expectedPromptId) return;
+    if (!latest.shownIds.includes(capability.id)) latest.shownIds.push(capability.id);
+    latest.primary = capability;
+    if (recovery) latest.recoveryInterventions += 1;
+    else latest.normalInterventions += 1;
+    latest.updatedAt = now();
+    try {
+      writeAdaptiveState(filePath, latest);
+    } catch {
+      // Delivery succeeded; losing dedupe state must not disturb the host.
+    }
+  };
+}
+
+async function runAdaptiveBatch(
+  input: HookInput,
+  deps: HookDeps,
+  startedAt: number,
+  now: () => number,
+): Promise<HookOutcome> {
+  if (isAdaptiveDisabled(deps.env)) {
+    return emptyOutcome(startedAt, now, "adaptive routing disabled", false);
+  }
+  const filePath = adaptiveFile(input, deps);
+  if (filePath === null) return emptyOutcome(startedAt, now, "missing adaptive session", false);
+  const state = readAdaptiveState(filePath);
+  if (state === null) return emptyOutcome(startedAt, now, "adaptive session not found", false);
+  if (input.prompt_id !== undefined && input.prompt_id !== state.promptId) {
+    return emptyOutcome(startedAt, now, "stale adaptive prompt", false);
+  }
+
+  const calls = input.tool_calls ?? [];
+  const observation = observeBatch(calls);
+  const adoptedCurrent = capabilityWasUsed(state.primary, calls);
+  if (adoptedCurrent && state.primary !== undefined) {
+    if (!state.usedIds.includes(state.primary.id)) state.usedIds.push(state.primary.id);
+  }
+  const eligible =
+    (!adoptedCurrent || observation.recovery) && shouldRouteBatch(state, observation);
+  const nextState: AdaptiveSessionState = {
+    ...state,
+    batchCount: state.batchCount + 1,
+    phase: observation.phase,
+    lastEvidenceHash: observation.evidenceHash,
+    updatedAt: now(),
+  };
+  try {
+    writeAdaptiveState(filePath, nextState);
+  } catch {
+    return emptyOutcome(startedAt, now, "adaptive state write failed", true);
+  }
+  if (!eligible) return emptyOutcome(startedAt, now, "adaptive gate abstained", false);
+
+  const resolved = resolveConfig({ env: deps.env, homeDir: deps.homeDir });
+  const { config } = resolved;
+  try {
+    resolveJevTarget({
+      provider: config.provider,
+      env: deps.env,
+      baseUrl: config.baseUrl,
+      model: config.model,
+    });
+  } catch (error) {
+    return emptyOutcome(startedAt, now, (error as Error).message, true);
+  }
+
+  let catalog: Catalog;
+  try {
+    catalog = await deps.scan({
+      homeDir: deps.homeDir,
+      cwd: deps.cwd,
+      env: deps.env,
+      ...(input.runtime === undefined ? {} : { runtimes: [input.runtime] }),
+      includeCachedCapabilities: true,
+    });
+  } catch (error) {
+    return emptyOutcome(startedAt, now, `catalog scan failed: ${(error as Error).message}`, true);
+  }
+
+  const usedInBatch = catalog.entries
+    .filter((entry) =>
+      capabilityWasUsed(
+        {
+          kind: entry.kind,
+          name: entry.name,
+          ...(entry.details?.type === "cli-command"
+            ? { invocationHint: entry.details.invocationHint }
+            : {}),
+        },
+        calls,
+      ),
+    )
+    .map((entry) => entry.id);
+  for (const id of usedInBatch) {
+    if (!nextState.usedIds.includes(id)) nextState.usedIds.push(id);
+  }
+  if (usedInBatch.length > 0) {
+    try {
+      writeAdaptiveState(filePath, nextState);
+    } catch {
+      return emptyOutcome(startedAt, now, "adaptive adoption state write failed", true);
+    }
+    if (!observation.recovery) {
+      return emptyOutcome(startedAt, now, "current batch already used a capability", false);
+    }
+  }
+
+  const excluded = new Set([...nextState.shownIds, ...nextState.usedIds]);
+  const task = buildAdaptivePrompt(nextState, observation);
+  const result = await (deps.routeFn ?? route)(task, {
+    entries: catalog.entries.filter((entry) => !excluded.has(entry.id)),
+    thresholds: { ...config.thresholds, maxRunnersUp: 0 },
+    quotaGroups: config.quotaGroups,
+    provider: config.provider,
+    model: config.model,
+    baseUrl: config.baseUrl,
+    uploadPrompt: config.uploadPrompt,
+    jev: { env: deps.env },
+  });
+
+  const promptHash = routeCacheKey(task, catalog.fingerprint, "adaptive").slice(0, 32);
+  recordRoute(result, deps, input, promptHash, catalog.fingerprint);
+  if (result.decision.kind !== "injected") {
+    return {
+      ...emptyOutcome(
+        startedAt,
+        now,
+        result.decision.kind === "degraded" ? result.decision.reason : result.decision.reason,
+        result.decision.kind === "degraded",
+      ),
+      result,
+    };
+  }
+
+  const capability = storedCapability(result);
+  if (
+    capability === null ||
+    nextState.shownIds.includes(capability.id) ||
+    nextState.usedIds.includes(capability.id)
+  ) {
+    return { ...emptyOutcome(startedAt, now, "adaptive duplicate suppressed", false), result };
+  }
+
+  const heading = observation.recovery ? "Recovery suggestion" : "Recommended now";
+  const text = renderInjection(result, {
+    heading,
+    maxChars: ADAPTIVE_MAX_CHARS,
+    maxRunnersUp: 0,
+  });
+  if (text === null)
+    return { ...emptyOutcome(startedAt, now, "adaptive render empty", false), result };
+  return {
+    payload: injectionPayload("PostToolBatch", text),
+    result,
+    cacheHit: false,
+    degraded: false,
+    elapsedMs: now() - startedAt,
+    acknowledge: acknowledgeAdaptiveInjection(
+      filePath,
+      nextState.promptId,
+      capability,
+      observation.recovery,
+      now,
+    ),
+  };
+}
+
+function runSubagentStart(
+  input: HookInput,
+  deps: HookDeps,
+  startedAt: number,
+  now: () => number,
+): HookOutcome {
+  if (isAdaptiveDisabled(deps.env)) {
+    return emptyOutcome(startedAt, now, "adaptive routing disabled", false);
+  }
+  if ((input.agent_id?.trim() ?? "") === "") {
+    return emptyOutcome(startedAt, now, "missing subagent id", false);
+  }
+  const parentFile = adaptiveFile(input, deps, null);
+  const childFile = adaptiveFile(input, deps, input.agent_id);
+  if (parentFile === null || childFile === null) {
+    return emptyOutcome(startedAt, now, "missing subagent session", false);
+  }
+  const parent = readAdaptiveState(parentFile);
+  if (parent === null) return emptyOutcome(startedAt, now, "parent adaptive state missing", false);
+  const childPromptId = input.prompt_id?.trim() || parent.promptId;
+  const existing = readAdaptiveState(childFile);
+  let child: AdaptiveSessionState;
+  if (existing !== null && existing.promptId === childPromptId) {
+    child = existing;
+  } else {
+    child = {
+      ...parent,
+      promptId: childPromptId,
+      updatedAt: now(),
+      batchCount: 0,
+      phase: "intent",
+      normalInterventions: 0,
+      recoveryInterventions: 0,
+      shownIds: [],
+      usedIds: [],
+      lastEvidenceHash: undefined,
+    };
+    try {
+      writeAdaptiveState(childFile, child);
+    } catch {
+      return emptyOutcome(startedAt, now, "subagent state write failed", true);
+    }
+  }
+
+  const capability = parent.primary;
+  if (
+    capability === undefined ||
+    capability.kind === "agent" ||
+    parent.usedIds.includes(capability.id) ||
+    capability.noneP > 0.2 ||
+    capability.confidence < 0.6
+  ) {
+    return emptyOutcome(startedAt, now, "no strong parent recommendation", false);
+  }
+  if (child.shownIds.includes(capability.id)) {
+    return emptyOutcome(startedAt, now, "subagent recommendation already shown", false);
+  }
+  const result: RouteResult = {
+    decision: {
+      kind: "injected",
+      primary: {
+        id: capability.id,
+        kind: capability.kind,
+        name: capability.name,
+        description: capability.description,
+        sourcePath: capability.sourcePath,
+        ...(capability.invocationHint === undefined
+          ? {}
+          : { invocationHint: capability.invocationHint }),
+        alternates: [],
+      },
+      runnersUp: [],
+      confidence: capability.confidence,
+      noneP: capability.noneP,
+    },
+    shortlist: [capability.id],
+    shortlistDetail: [],
+    primary: {
+      id: capability.id,
+      confidence: capability.confidence,
+      noneP: capability.noneP,
+      probability: capability.probability,
+    },
+    ranking: [],
+    latencyMs: now() - startedAt,
+    cacheHit: true,
+    promptChars: parent.goal.length,
+    provider: "session-state",
+    model: "session-state",
+  };
+  const text = renderInjection(result, {
+    heading: "Useful for this subagent",
+    maxChars: ADAPTIVE_MAX_CHARS,
+    maxRunnersUp: 0,
+  });
+  if (text === null) return emptyOutcome(startedAt, now, "subagent render empty", false);
+  return {
+    payload: injectionPayload("SubagentStart", text),
+    result,
+    cacheHit: true,
+    degraded: false,
+    elapsedMs: now() - startedAt,
+    acknowledge: acknowledgeAdaptiveInjection(childFile, child.promptId, capability, false, now),
+  };
+}
+
 /**
  * Decide what a hook should inject for one prompt.
  *
@@ -154,8 +583,26 @@ export async function runHook(input: HookInput, deps: HookDeps): Promise<HookOut
   try {
     if (isDisabled(deps.env)) return empty("disabled via SKILLFUL_DISABLE", false);
 
+    if (event === "SessionEnd") {
+      if (input.runtime === "claude-code" && (input.session_id?.trim() ?? "") !== "") {
+        try {
+          removeAdaptiveSession(
+            adaptiveStateRoot(deps.homeDir, deps.env),
+            input.session_id as string,
+          );
+        } catch {
+          return empty("adaptive session cleanup failed", true);
+        }
+      }
+      return empty("adaptive session cleaned", false);
+    }
+    if (event === "PostToolBatch") return await runAdaptiveBatch(input, deps, startedAt, now);
+    if (event === "SubagentStart") return runSubagentStart(input, deps, startedAt, now);
+    if (event !== "UserPromptSubmit") return empty(`unsupported hook event ${event}`, false);
+
     const prompt = typeof input.prompt === "string" ? input.prompt : "";
     if (prompt.trim().length === 0) return empty("empty prompt", false);
+    const promptStateFile = beginPromptState(input, deps, prompt, now());
 
     const resolved = resolveConfig({ env: deps.env, homeDir: deps.homeDir });
     const { config } = resolved;
@@ -218,7 +665,7 @@ export async function runHook(input: HookInput, deps: HookDeps): Promise<HookOut
         elapsedMs: now() - startedAt,
       };
       recordRoute(cached, deps, input, promptHash, catalog.fingerprint);
-      return outcome;
+      return stagePromptRecommendation(outcome, cached, promptStateFile, now());
     }
 
     const result = await (deps.routeFn ?? route)(prompt, {
@@ -263,7 +710,7 @@ export async function runHook(input: HookInput, deps: HookDeps): Promise<HookOut
       elapsedMs: now() - startedAt,
     };
     recordRoute(result, deps, input, promptHash, catalog.fingerprint);
-    return outcome;
+    return stagePromptRecommendation(outcome, result, promptStateFile, now());
   } catch (error) {
     // The last line of defence. Reaching here means a bug, and the user still gets a working
     // agent: no output, exit 0, nothing on stderr.

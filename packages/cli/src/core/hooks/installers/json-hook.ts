@@ -57,7 +57,7 @@ function ourEntries(ctx: InstallContext, runtime: CatalogRuntime, event: string)
   if (event === "SessionStart") {
     const entries: HookEntry[] = [
       {
-        matcher: "startup|resume|clear",
+        matcher: "startup|resume|clear|fork",
         hooks: [
           {
             type: "command",
@@ -76,6 +76,42 @@ function ourEntries(ctx: InstallContext, runtime: CatalogRuntime, event: string)
       });
     }
     return entries;
+  }
+  if (
+    runtime === "claude-code" &&
+    (event === "ConfigChange" || event === "CwdChanged" || event === "DirectoryAdded")
+  ) {
+    const matcher =
+      event === "ConfigChange"
+        ? "user_settings|project_settings|local_settings|skills"
+        : event === "DirectoryAdded"
+          ? "slash_command|register_repo_root"
+          : undefined;
+    return [
+      {
+        ...(matcher === undefined ? {} : { matcher }),
+        hooks: [
+          {
+            type: "command",
+            command: refreshCommand(ctx, runtime),
+            async: true,
+            timeout: 900,
+            statusMessage: "Refreshing Skillful capabilities",
+          },
+        ],
+      },
+    ];
+  }
+  if (
+    runtime === "claude-code" &&
+    (event === "PostToolBatch" || event === "SubagentStart" || event === "SessionEnd")
+  ) {
+    return [
+      {
+        matcher: "*",
+        hooks: [{ type: "command", command: hookCommand(ctx, runtime), timeout: 3 }],
+      },
+    ];
   }
   return [{ matcher: "*", hooks: [{ type: "command", command: hookCommand(ctx, runtime) }] }];
 }

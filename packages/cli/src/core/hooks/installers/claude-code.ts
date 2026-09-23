@@ -19,11 +19,23 @@ import type { InstallContext, InstallOutcome, UninstallOutcome } from "./types.j
 
 const RUNTIME: CatalogRuntime = "claude-code";
 
+export const CLAUDE_MANAGED_HOOK_EVENTS = [
+  "UserPromptSubmit",
+  "SessionStart",
+  "PostCompact",
+  "PostToolBatch",
+  "SubagentStart",
+  "SessionEnd",
+  "ConfigChange",
+  "CwdChanged",
+  "DirectoryAdded",
+] as const;
+
 function spec(ctx: InstallContext): JsonHookSpec {
   return {
     runtime: RUNTIME,
     target: path.join(claudeConfigDir(ctx.homeDir, ctx.env), "settings.json"),
-    events: ["UserPromptSubmit", "SessionStart", "PostCompact"],
+    events: CLAUDE_MANAGED_HOOK_EVENTS,
   };
 }
 

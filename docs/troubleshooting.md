@@ -27,6 +27,9 @@ Work down this list.
 3. **Is it disabled?** `SKILLFUL_DISABLE=1` short-circuits the hook before any work. `doctor`
    reports it as a warning rather than a failure, because it is a legitimate setting.
 
+   If initial prompt recommendations work but no mid-task recommendation ever appears, also check
+   that `SKILLFUL_ADAPTIVE` is not set to `0`, `false`, `off`, or `no` in Claude's environment.
+
 4. **Did the session restart?** Claude Code and Codex read their hook configuration at session
    start. A hook installed mid-session does not take effect until you start a new one. Pi and OMP
    extensions can be reloaded with `/reload`.
@@ -61,6 +64,14 @@ Vercel, then OpenRouter.
 
 A degraded result is never cached, so a transient outage does not freeze the behaviour for the
 cache's lifetime. Recovery is immediate once the cause is fixed.
+
+## Mid-task recommendations are too frequent
+
+The installed policy permits at most one normal and one recovery recommendation per prompt, never
+repeats the same capability after delivery or observed use, and emits only one primary within 240
+characters. If that is still distracting, set `SKILLFUL_ADAPTIVE=0` and restart Claude Code. This
+leaves the original `UserPromptSubmit` recommendation active while disabling `PostToolBatch` and
+`SubagentStart` output.
 
 ## It suggests the wrong capability
 

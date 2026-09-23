@@ -11,6 +11,7 @@
  */
 
 import { scanCatalog } from "../core/catalog/scan.js";
+import { isAdaptiveDisabled } from "../core/hooks/adaptive.js";
 import { loadCache } from "../core/hooks/cache.js";
 import { hookStatus } from "../core/hooks/install.js";
 import { renderInjection } from "../core/hooks/render.js";
@@ -20,7 +21,7 @@ import {
   isDisabled,
   resolveForReport,
 } from "../core/hooks/runner.js";
-import { resolveJevTarget, type JevTarget } from "../core/jev/client.js";
+import { type JevTarget, resolveJevTarget } from "../core/jev/client.js";
 import { route } from "../core/router/route.js";
 
 export interface DoctorCommandOptions {
@@ -84,9 +85,10 @@ export async function doctorCommand(options: DoctorCommandOptions = {}): Promise
   checks.push({
     name: "Jev provider",
     status: hasKey ? "ok" : "fail",
-    detail: target !== undefined
-      ? `${target.provider} selected with ${target.apiKeyEnv}.`
-      : `${providerError ?? "No provider credential found"} Routing will degrade to a reminder until it is fixed. Skillful reads keys only from the environment and never writes them to disk.`,
+    detail:
+      target !== undefined
+        ? `${target.provider} selected with ${target.apiKeyEnv}.`
+        : `${providerError ?? "No provider credential found"} Routing will degrade to a reminder until it is fixed. Skillful reads keys only from the environment and never writes them to disk.`,
   });
 
   for (const warning of resolved.warnings) {
@@ -103,6 +105,19 @@ export async function doctorCommand(options: DoctorCommandOptions = {}): Promise
         ? `${installedCount} of ${runtimes.length} supported runtimes have a Skillful hook.`
         : "No Skillful hook installed. Run: skillful install",
   });
+  const claude = runtimes.find((entry) => entry.runtime === "claude-code");
+  if (claude?.present === true) {
+    const adaptiveDisabled = isAdaptiveDisabled(env);
+    checks.push({
+      name: "Claude adaptive hooks",
+      status: !claude.installed ? "fail" : adaptiveDisabled ? "warn" : "ok",
+      detail: !claude.installed
+        ? claude.detail
+        : adaptiveDisabled
+          ? "SKILLFUL_ADAPTIVE disables PostToolBatch and SubagentStart recommendations."
+          : "PostToolBatch, SubagentStart, SessionEnd and refresh hooks are installed and enabled.",
+    });
+  }
 
   let catalog: DoctorReport["catalog"] = null;
   try {

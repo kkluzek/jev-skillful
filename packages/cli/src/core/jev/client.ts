@@ -41,7 +41,7 @@ export interface JevClientOptions {
   model?: string;
   /** Timeout for a single HTTP attempt, not for the whole retry sequence. */
   requestTimeoutMs?: number;
-  /** Retries after the first attempt. Applied to 429 and 529 only. */
+  /** Retries after the first attempt. Applied to rate limits and transient gateway failures. */
   maxRetries?: number;
   /** Backoff before the first retry, doubled each time. */
   retryBaseDelayMs?: number;
@@ -64,8 +64,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 1800;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_BASE_DELAY_MS = 250;
 
-/** Statuses worth retrying: rate limit and upstream overload. 401 and 422 are not. */
-const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 529]);
+/** Statuses worth retrying: rate limit, upstream overload, and transient gateways. */
+const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 502, 503, 504, 529]);
 
 export interface JevTarget {
   provider: JevProvider;

@@ -85,6 +85,7 @@ Environment:
   SKILLFUL_BASE_URL            Override the selected provider's endpoint
   SKILLFUL_HOOK_LAUNCHER       Absolute credential launcher recorded by install
   SKILLFUL_BUDGET_MS           Override the routing budget in milliseconds
+  SKILLFUL_ADAPTIVE=0          Disable Claude mid-task routing; prompt routing remains active
   SKILLFUL_UPLOAD_PROMPT       Set to false to never transmit prompt text
   AGENTKIT_CODEX_SKILLS_ROOT   Override the shared Codex/agents skills root
   AGENTKIT_OMP_HOME, OMP_HOME  Override the Oh My Pi home directory

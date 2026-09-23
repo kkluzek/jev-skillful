@@ -3,7 +3,8 @@
 Skillful installs a hook into each agent runtime it finds on your machine. After that, every
 prompt you type gets one Jev request through the selected provider that decides whether a
 capability you already have installed is relevant, and injects at most one primary suggestion
-plus two runner-ups.
+plus two runner-ups. Claude Code can also make a bounded second decision after a meaningful
+mid-task phase change or failure.
 
 ## Requirements
 
@@ -73,7 +74,7 @@ configuration directory exists are touched:
 
 | Runtime | What is written | Mechanism |
 |---|---|---|
-| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json` (or `~/.claude/settings.json`) → `UserPromptSubmit`, `SessionStart` + `PostCompact` | route, refresh + reminder hooks |
+| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json` (or `~/.claude/settings.json`) → `UserPromptSubmit`, `PostToolBatch`, `SubagentStart`, `SessionEnd`, refresh events, `SessionStart` + `PostCompact` | initial/adaptive route, subagent handoff, cleanup, refresh + reminder hooks |
 | Codex | `~/.codex/hooks.json` → `UserPromptSubmit` + `SessionStart` | route + refresh hooks |
 | Pi | `~/.pi/agent/extensions/skillful/index.ts` | extension |
 | OMP | `~/.omp/agent/extensions/skillful/index.ts` | extension |
@@ -88,7 +89,7 @@ skillful install --json                 # machine-readable report
 
 Then restart your agent session.
 
-At each matching `SessionStart` event (`startup`, `resume`, or `clear`) Skillful starts one
+At each matching `SessionStart` event (`startup`, `resume`, `clear`, or `fork`) Skillful starts one
 **asynchronous** refresh for that client. It does not delay the conversation: the first prompt may
 run before discovery completes. A fail-closed marker hides affected previous partitions before the
 job waits for the shared lock; they are then checkpointed as stale and are not offered to Jev.
@@ -107,6 +108,14 @@ expected session-start delivery was missed.
 Pending delivery is acknowledged only after the hook JSON flushes. If `PostCompact` cannot persist
 its result, a private failure marker makes that error visible on the next `SessionStart` instead of
 using an output field Claude ignores for `PostCompact`.
+
+Claude adaptive routing is active immediately after installation; there is no shadow mode.
+`PostToolBatch` first applies a local novelty, phase, failure, adoption, cooldown and budget gate.
+Only an eligible batch makes a Jev request. A prompt can receive at most one normal and one recovery
+suggestion, each containing one primary capability and no runner-ups. `SubagentStart` may inherit
+one strong, unused parent recommendation without another API request. `SessionEnd` removes the
+private state. Configuration, working-directory and added-directory changes start a quiet
+asynchronous catalog refresh.
 
 You can inspect or rerun the refresh explicitly:
 
@@ -136,6 +145,11 @@ use recursive `--help` only as a fallback, inside a no-network macOS sandbox wit
 and output limits. Transitive package dependencies, `.venv/bin`, and arbitrary PATH entries are not
 indexed. `PATH` is consulted only for a specific basename after the package manager has already
 proven it is a direct installation.
+
+As verified on 2026-09-23, discovery accepts Bun 1.4's `node_modules (N installed)` global-list
+header and safely retries pnpm 12.5's trusted shebang-less shim through `/bin/sh` when macOS returns
+`ENOEXEC`. No shell string is constructed; the already trusted executable and its argv remain
+separate arguments.
 
 ## What was written to your files
 
@@ -197,6 +211,8 @@ Environment variables override the file, and CLI flags override both. The full s
   Environment only.
 - `SKILLFUL_MODEL` and `SKILLFUL_BASE_URL` — override the selected provider's defaults.
 - `SKILLFUL_DISABLE=1` — turn the hook off completely, with no other effect.
+- `SKILLFUL_ADAPTIVE=0` — disable only Claude mid-task and subagent recommendations. Initial
+  `UserPromptSubmit` routing, refresh and reminders stay enabled.
 
 Reminder tuning is environment-only: `SKILLFUL_REMINDER_THRESHOLD` (default `0.72`),
 `SKILLFUL_REMINDER_TOP_K` (12), `SKILLFUL_REMINDER_MAX_ITEMS` (3),

@@ -14,7 +14,7 @@
 
 import { scanCatalog } from "../core/catalog/scan.js";
 import type { CatalogRuntime } from "../core/catalog/types.js";
-import { type HookInput, isDisabled, runHook } from "../core/hooks/runner.js";
+import { type HookInput, type HookToolCall, isDisabled, runHook } from "../core/hooks/runner.js";
 import { preparePendingReminder } from "../core/reminder/runner.js";
 import { writeHookPayload } from "./hook-output.js";
 
@@ -25,6 +25,29 @@ export interface HookCommandOptions {
   /** Raw stdin text. Empty or malformed input is tolerated and treated as "no prompt". */
   stdin: string;
   runtime?: CatalogRuntime;
+}
+
+const MAX_TOOL_CALLS = 32;
+
+function parseToolCalls(value: unknown): HookToolCall[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const calls: HookToolCall[] = [];
+  for (const item of value.slice(0, MAX_TOOL_CALLS)) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record["tool_name"] !== "string") continue;
+    const toolInput = record["tool_input"];
+    calls.push({
+      tool_name: record["tool_name"],
+      tool_input:
+        typeof toolInput === "object" && toolInput !== null && !Array.isArray(toolInput)
+          ? (toolInput as Record<string, unknown>)
+          : {},
+      ...(typeof record["tool_use_id"] === "string" ? { tool_use_id: record["tool_use_id"] } : {}),
+      ...(record["tool_response"] === undefined ? {} : { tool_response: record["tool_response"] }),
+    });
+  }
+  return calls;
 }
 
 /** Parse stdin into a hook input, tolerating anything that is not the expected shape. */
@@ -46,9 +69,13 @@ export function parseHookInput(stdin: string): HookInput {
         : typeof record["user_prompt"] === "string"
           ? record["user_prompt"]
           : "";
+    const toolCalls = parseToolCalls(record["tool_calls"]);
     return {
       prompt,
       ...(typeof record["session_id"] === "string" ? { session_id: record["session_id"] } : {}),
+      ...(typeof record["prompt_id"] === "string" ? { prompt_id: record["prompt_id"] } : {}),
+      ...(typeof record["agent_id"] === "string" ? { agent_id: record["agent_id"] } : {}),
+      ...(typeof record["agent_type"] === "string" ? { agent_type: record["agent_type"] } : {}),
       ...(typeof record["cwd"] === "string" ? { cwd: record["cwd"] } : {}),
       ...(typeof record["hook_event_name"] === "string"
         ? { hook_event_name: record["hook_event_name"] }
@@ -56,6 +83,7 @@ export function parseHookInput(stdin: string): HookInput {
       ...(typeof record["transcript_path"] === "string"
         ? { transcript_path: record["transcript_path"] }
         : {}),
+      ...(toolCalls === undefined ? {} : { tool_calls: toolCalls }),
     };
   } catch {
     return { prompt: trimmed };
@@ -101,6 +129,9 @@ export async function hookCommand(options: HookCommandOptions): Promise<number> 
     }
   }
 
-  if (await writeHookPayload(outcome.payload)) acknowledgeReminder?.();
+  if (await writeHookPayload(outcome.payload)) {
+    outcome.acknowledge?.();
+    acknowledgeReminder?.();
+  }
   return 0;
 }

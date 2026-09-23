@@ -21,6 +21,8 @@ export interface RenderOptions {
   maxRunnersUp?: number;
   /** Hard cap on the rendered message length, including the prefix. */
   maxChars?: number;
+  /** Event-specific lead-in. Initial prompt routing keeps the historical wording. */
+  heading?: string;
 }
 
 export const DEFAULT_MAX_RUNNERS_UP = 2;
@@ -64,6 +66,7 @@ export function renderInjection(result: RouteResult, options: RenderOptions = {}
 
   const maxRunnersUp = options.maxRunnersUp ?? DEFAULT_MAX_RUNNERS_UP;
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
+  const heading = options.heading ?? "Relevant capability";
 
   const runnersUp = decision.runnersUp.slice(0, Math.max(0, maxRunnersUp));
 
@@ -72,7 +75,7 @@ export function renderInjection(result: RouteResult, options: RenderOptions = {}
   const descriptionLimit = runnersUp.length === 0 ? 180 : 140;
 
   const lines: string[] = [
-    `${INJECTION_PREFIX} Relevant capability: ${label(decision.primary, descriptionLimit)}.`,
+    `${INJECTION_PREFIX} ${heading}: ${label(decision.primary, descriptionLimit)}.`,
   ];
 
   if (runnersUp.length > 0) {
@@ -85,7 +88,7 @@ export function renderInjection(result: RouteResult, options: RenderOptions = {}
   // A message over budget is trimmed by dropping runner-ups before it is truncated mid-word,
   // because a half-sentence of a capability name is worse than not mentioning it.
   if (rendered.length > maxChars && runnersUp.length > 0) {
-    const primaryOnly = `${INJECTION_PREFIX} Relevant capability: ${label(decision.primary, descriptionLimit)}.`;
+    const primaryOnly = `${INJECTION_PREFIX} ${heading}: ${label(decision.primary, descriptionLimit)}.`;
     if (primaryOnly.length <= maxChars) return primaryOnly;
   }
 

@@ -310,7 +310,7 @@ function parseBunGlobalListDetailed(raw: string): {
   unrecognised: string[];
 } {
   const lines = raw.split(/\r?\n/);
-  const header = /^(.+?)\s+node_modules\s+\(\d+\)\s*$/.exec(lines[0] ?? "");
+  const header = /^(.+?)\s+node_modules\s+\(\d+(?:\s+installed)?\)\s*$/.exec(lines[0] ?? "");
   const root = header?.[1] === undefined ? null : path.join(header[1].trim(), "node_modules");
   if (root === null) {
     return { root, packages: [], unrecognised: lines.filter((line) => line.trim() !== "") };
@@ -390,8 +390,23 @@ export class SpawnTrustedCommandRunner implements TrustedCommandRunner {
   constructor(private readonly env: Readonly<Record<string, string | undefined>>) {}
 
   async run(request: TrustedRunRequest): Promise<TrustedRunResult> {
+    try {
+      return await this.runOnce(request.executable, request.args, request);
+    } catch (error) {
+      if (process.platform !== "win32" && (error as NodeJS.ErrnoException).code === "ENOEXEC") {
+        return this.runOnce("/bin/sh", [request.executable, ...request.args], request);
+      }
+      throw error;
+    }
+  }
+
+  private async runOnce(
+    executable: string,
+    args: readonly string[],
+    request: TrustedRunRequest,
+  ): Promise<TrustedRunResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(request.executable, request.args, {
+      const child = spawn(executable, args, {
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",

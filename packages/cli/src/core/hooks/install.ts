@@ -13,13 +13,18 @@
 
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import type { CatalogRuntime } from "../catalog/types.js";
 import { detectRuntimes, runtimeLocations } from "./detect.js";
-import { installClaudeCode, uninstallClaudeCode } from "./installers/claude-code.js";
+import {
+  CLAUDE_MANAGED_HOOK_EVENTS,
+  installClaudeCode,
+  uninstallClaudeCode,
+} from "./installers/claude-code.js";
 import { installCodex, uninstallCodex } from "./installers/codex.js";
 import { installOmp, uninstallOmp } from "./installers/omp.js";
 import { installPi, uninstallPi } from "./installers/pi.js";
 import type { InstallContext, InstallOutcome, UninstallOutcome } from "./installers/types.js";
-import type { CatalogRuntime } from "../catalog/types.js";
+import { type HookEntry, isSkillfulEntry } from "./json-merge.js";
 
 export interface InstallSummary {
   outcomes: InstallOutcome[];
@@ -90,7 +95,10 @@ const UNINSTALLERS: Record<CatalogRuntime, (ctx: InstallContext) => UninstallOut
  * `only` restricts the run to a subset, which the CLI exposes as `--runtime`. Asking for a
  * runtime that is not installed is not an error: it is reported in `missing`.
  */
-export function installHooks(ctx: InstallContext, only?: readonly CatalogRuntime[]): InstallSummary {
+export function installHooks(
+  ctx: InstallContext,
+  only?: readonly CatalogRuntime[],
+): InstallSummary {
   const detected = detectRuntimes(ctx.homeDir, ctx.env);
   const missing = detected.filter((entry) => !entry.present).map((entry) => entry.runtime);
 
@@ -185,23 +193,67 @@ export function hookStatus(
     const location = locations.get(entry.runtime);
     const target = location?.hookTarget ?? entry.hookTarget;
     if (!entry.present) {
-      return { runtime: entry.runtime, present: false, installed: false, target, detail: "Configuration directory not found" };
+      return {
+        runtime: entry.runtime,
+        present: false,
+        installed: false,
+        target,
+        detail: "Configuration directory not found",
+      };
     }
 
     // Read-only inspection mirrors what the uninstaller would remove, so a status of
     // "installed" can never disagree with what `uninstall` actually does.
-    const installed = entry.mechanism === "hook"
-      ? hookFileContainsSkillful(target)
-      : extensionDirExists(target);
+    let installed: boolean;
+    let detail: string;
+    if (entry.runtime === "claude-code") {
+      const presentEvents = hookFileSkillfulEvents(target);
+      const missing = CLAUDE_MANAGED_HOOK_EVENTS.filter((event) => !presentEvents.has(event));
+      installed = missing.length === 0;
+      detail = installed
+        ? "Skillful hook installed"
+        : `Incomplete Skillful hook; missing: ${missing.join(", ")}`;
+    } else {
+      installed =
+        entry.mechanism === "hook" ? hookFileContainsSkillful(target) : extensionDirExists(target);
+      detail = installed ? "Skillful hook installed" : "No Skillful hook";
+    }
 
     return {
       runtime: entry.runtime,
       present: true,
       installed,
       target,
-      detail: installed ? "Skillful hook installed" : "No Skillful hook",
+      detail,
     };
   });
+}
+
+function hookFileSkillfulEvents(filePath: string): Set<string> {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return new Set();
+    const hooks = (parsed as Record<string, unknown>)["hooks"];
+    if (typeof hooks !== "object" || hooks === null || Array.isArray(hooks)) return new Set();
+    const present = new Set<string>();
+    for (const [event, value] of Object.entries(hooks)) {
+      if (!Array.isArray(value)) continue;
+      if (
+        (value as unknown[]).some(
+          (hook) =>
+            typeof hook === "object" &&
+            hook !== null &&
+            !Array.isArray(hook) &&
+            isSkillfulEntry(hook as HookEntry),
+        )
+      ) {
+        present.add(event);
+      }
+    }
+    return present;
+  } catch {
+    return new Set();
+  }
 }
 
 function hookFileContainsSkillful(filePath: string): boolean {

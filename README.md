@@ -34,6 +34,11 @@ Your prompt
   │    miss → route within a 2000ms budget
   │    error or over budget → inject one reminder line, never fail the prompt
   │
+  ├─ Claude adaptive routing (inside the same user turn)
+  │    PostToolBatch → local phase/failure/adoption gate → optional Jev route
+  │    at most 1 normal + 1 recovery suggestion per prompt; 240-character cap
+  │    SubagentStart can inherit one strong, unused parent recommendation
+  │
   ├─ Session-start refresh (client-specific, asynchronous)
 │    exact MCP tools for this Codex or Claude Code configuration
 │    active Codex/Claude plugins and their exact skill/command names
@@ -52,14 +57,15 @@ Your prompt
   │    a `choice` question over the shortlist plus `none`
   │    per-candidate `noul` questions to rank the runners-up
   │
-  └─ Inject at most 1 primary + 2 runner-ups, or nothing
+  └─ Initial prompt: at most 1 primary + 2 runner-ups; mid-task: 1 primary or nothing
 ```
 
 Two design choices are worth stating because they are deliberate:
 
 **The shortlist is what the model sees, not what gets injected.** Injecting the whole shortlist
 on every prompt would reproduce the exact "enumerate every available skill" pattern that made
-retrieval necessary. The cap is one suggestion plus two alternatives.
+retrieval necessary. Initial prompt routing is capped at one suggestion plus two alternatives;
+adaptive mid-task routing emits one suggestion only.
 
 **Abstaining is a first-class outcome.** A prompt that does not need a capability gets nothing
 injected. Trivial prompts, questions and chit-chat are handled by the `none` option in the same
@@ -153,6 +159,11 @@ number fell to its honest value. A retrieval result that depends on a leaked URL
   waiting for the shared cache lock, refresh publishes a fail-closed marker that immediately hides
   affected old partitions; it then checkpoints and replaces completed partitions atomically. Stale
   or failed entries remain diagnostic-only.
+- Claude Code reroutes only at a meaningful `PostToolBatch` phase change or a classified failure.
+  A successful use of the current recommendation suppresses a competing suggestion. State is
+  deduplicated per prompt and subagent, and `SessionEnd` removes it.
+- A read-only Claude Code 2.1.280 session on 2026-09-23 recorded the Skillful prompt context, five
+  live `PostToolBatch` hooks and successful `SessionEnd` cleanup while running all 465 tests.
 
 ## Commands
 
@@ -188,6 +199,12 @@ npx @mrgoonie/skillful export-case --prompt "..."   # a redacted case to paste i
 - Claude reminder indexes and per-session deduplication state are private local files. The reminder
   decision log contains the observed query text and therefore is sensitive; see
   [docs/reminder-layer.md](docs/reminder-layer.md) for paths, retention and disable controls.
+- Claude adaptive routing stores the current prompt and bounded recommendation state in a private
+  `0600` file below `~/.local/state/skillful/adaptive-v1/` (or `XDG_STATE_HOME`). It is used only
+  for the active session, removed by the installed `SessionEnd` hook, and pruned after 24 hours if
+  a crash prevents normal cleanup. It is not telemetry and
+  is never uploaded independently; only the bounded adaptive route query reaches the selected Jev
+  provider. Set `SKILLFUL_ADAPTIVE=0` to disable this layer without disabling initial prompt routing.
 - Nothing is collected. There is no telemetry that leaves the machine.
 
 ## Security
@@ -207,6 +224,7 @@ injects it. Read it at `~/.pi/agent/extensions/skillful/index.ts` before trustin
 - [docs/telemetry.md](docs/telemetry.md) — what is logged, what is never logged, and how to turn it off
 - [docs/bench.md](docs/bench.md) — the outcome benchmark, its evidence threshold, and its status
 - [docs/reminder-layer.md](docs/reminder-layer.md) — Claude memory/rule retrieval and its limits
+- [docs/adaptive-routing.md](docs/adaptive-routing.md) — mid-task Claude routing, limits and state
 - [docs/reminder-retrieval-evaluation.md](docs/reminder-retrieval-evaluation.md) — observed BM25 gate results
 - [docs/troubleshooting.md](docs/troubleshooting.md) — when it does not work
 

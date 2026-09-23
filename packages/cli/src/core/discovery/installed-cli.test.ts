@@ -7,6 +7,7 @@ import {
   flattenCarapaceExport,
   parseBunGlobalList,
   parseUvToolList,
+  SpawnTrustedCommandRunner,
   type TrustedCommandRunner,
 } from "./installed-cli.js";
 
@@ -71,6 +72,36 @@ describe("installed CLI parsers", () => {
         { packageName: "plain", version: "4.5.6", packagePath: "/global/node_modules/plain" },
       ],
     });
+  });
+
+  it("accepts Bun 1.4's installed-count header", () => {
+    expect(
+      parseBunGlobalList(
+        `/global node_modules (187 installed)\n└── @oh-my-pi/pi-coding-agent@18.2.10\n`,
+      ),
+    ).toEqual({
+      root: "/global/node_modules",
+      packages: [
+        {
+          packageName: "@oh-my-pi/pi-coding-agent",
+          version: "18.2.10",
+          packagePath: "/global/node_modules/@oh-my-pi/pi-coding-agent",
+        },
+      ],
+    });
+  });
+
+  it("retries a trusted shebang-less manager shim through /bin/sh after ENOEXEC", async () => {
+    const shim = path.join(root, "pnpm");
+    await writeFile(shim, "printf '%s\\n' \"$1\"\n", "utf8");
+    await chmod(shim, 0o755);
+
+    const result = await new SpawnTrustedCommandRunner({ PATH: process.env.PATH }).run({
+      executable: shim,
+      args: ["list"],
+    });
+
+    expect(result).toEqual({ stdout: "list\n", stderr: "", exitCode: 0 });
   });
 
   it("flattens a Carapace export without inventing commands", () => {

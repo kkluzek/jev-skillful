@@ -177,6 +177,41 @@ const DEGRADED: RouteResult = {
   decision: { kind: "degraded", reason: "network" },
 };
 
+const SKIPPED: RouteResult = {
+  ...INJECTED,
+  decision: { kind: "skipped", reason: "none-won" },
+  primary: undefined,
+};
+
+function injectedResult(id: string, name: string, runnersUp = 0): RouteResult {
+  return {
+    ...INJECTED,
+    decision: {
+      kind: "injected",
+      primary: {
+        id,
+        kind: "skill",
+        name,
+        description: `${name} description`,
+        sourcePath: `/skills/${name}`,
+        alternates: [],
+      },
+      runnersUp: Array.from({ length: runnersUp }, (_, index) => ({
+        id: `runner-${index}`,
+        kind: "skill" as const,
+        name: `runner-${index}`,
+        description: "runner description",
+        sourcePath: `/skills/runner-${index}`,
+        alternates: [],
+        noul: 0.9,
+      })),
+      confidence: 0.9,
+      noneP: 0.05,
+    },
+    primary: { id, probability: 0.7, confidence: 0.9, noneP: 0.05 },
+  };
+}
+
 describe("cache", () => {
   it("keys on the normalised prompt and the catalog fingerprint", () => {
     // Case and whitespace differences must share an entry.
@@ -401,7 +436,7 @@ describe("installers", () => {
     expect(settings.hooks.UserPromptSubmit).toHaveLength(1);
     expect(settings.hooks.UserPromptSubmit[0].hooks[0].command).toContain("--runtime claude-code");
     expect(settings.hooks.SessionStart).toHaveLength(2);
-    expect(settings.hooks.SessionStart[0].matcher).toBe("startup|resume|clear");
+    expect(settings.hooks.SessionStart[0].matcher).toBe("startup|resume|clear|fork");
     expect(settings.hooks.SessionStart[0].hooks[0].command).toContain(
       "refresh --runtime claude-code",
     );
@@ -410,6 +445,27 @@ describe("installers", () => {
     expect(settings.hooks.SessionStart[1].hooks[0].command).toContain(" remind ");
     expect(settings.hooks.PostCompact).toHaveLength(1);
     expect(settings.hooks.PostCompact[0].matcher).toBe("manual|auto");
+    expect(settings.hooks.PostToolBatch).toHaveLength(1);
+    expect(settings.hooks.PostToolBatch[0].hooks[0].command).toContain(
+      "hook --runtime claude-code",
+    );
+    expect(settings.hooks.PostToolBatch[0].hooks[0].timeout).toBe(3);
+    expect(settings.hooks.SubagentStart).toHaveLength(1);
+    expect(settings.hooks.SubagentStart[0].hooks[0].command).toContain(
+      "hook --runtime claude-code",
+    );
+    expect(settings.hooks.SessionEnd).toHaveLength(1);
+    expect(settings.hooks.SessionEnd[0].hooks[0].command).toContain("hook --runtime claude-code");
+    expect(settings.hooks.ConfigChange[0].hooks[0].command).toContain(
+      "refresh --runtime claude-code",
+    );
+    expect(settings.hooks.ConfigChange[0].hooks[0].async).toBe(true);
+    expect(settings.hooks.CwdChanged[0].hooks[0].command).toContain(
+      "refresh --runtime claude-code",
+    );
+    expect(settings.hooks.DirectoryAdded[0].hooks[0].command).toContain(
+      "refresh --runtime claude-code",
+    );
 
     const codex = JSON.parse(readFileSync(path.join(home, ".codex", "hooks.json"), "utf8"));
     expect(codex.hooks.UserPromptSubmit[0].hooks[0].command).toContain("--runtime codex");
@@ -460,9 +516,9 @@ describe("installers", () => {
     const summary = installHooks(ctx, ["claude-code", "pi"]);
     expect(summary.hookLauncher).toBe(launcher);
     const settings = JSON.parse(readFileSync(path.join(home, ".claude", "settings.json"), "utf8"));
-    expect(settings.hooks.UserPromptSubmit[0].hooks[0].command.startsWith(`"${launcher}" hook`)).toBe(
-      true,
-    );
+    expect(
+      settings.hooks.UserPromptSubmit[0].hooks[0].command.startsWith(`"${launcher}" hook`),
+    ).toBe(true);
     const extension = readFileSync(
       path.join(home, ".pi", "agent", "extensions", "skillful", "index.ts"),
       "utf8",
@@ -636,6 +692,35 @@ describe("installers", () => {
     uninstallHooks(installContext(home));
     expect(hookStatus(home).find((s) => s.runtime === "claude-code")?.installed).toBe(false);
   });
+
+  it("reports a partial Claude installation instead of accepting any one Skillful entry", () => {
+    const home = makeHome();
+    mkdirSync(path.join(home, ".claude"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [
+            {
+              matcher: "*",
+              hooks: [
+                {
+                  type: "command",
+                  command: "skillful hook --runtime claude-code --managed-by-skillful",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    const status = hookStatus(home).find((entry) => entry.runtime === "claude-code");
+    expect(status?.installed).toBe(false);
+    expect(status?.detail).toContain("PostToolBatch");
+    expect(status?.detail).toContain("SessionEnd");
+  });
 });
 
 function fsExists(target: string): boolean {
@@ -668,6 +753,507 @@ function deps(
 }
 
 describe("runner", () => {
+  it("reroutes once after a meaningful mid-task phase change", async () => {
+    const home = makeHome();
+    const prompts: string[] = [];
+    const results = [
+      injectedResult("skill:initial", "initial-skill"),
+      injectedResult("skill:verify", "verification-skill", 2),
+    ];
+    const routeFn = (async (prompt: string) => {
+      prompts.push(prompt);
+      const result = results.shift();
+      if (result === undefined) throw new Error("unexpected route call");
+      return result;
+    }) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = deps(home, { TYPESAFE_API_KEY: "k" }, routeFn);
+
+    const initial = await runHook(
+      {
+        prompt: "Implement the authentication change and verify it",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-adaptive",
+        prompt_id: "prompt-adaptive",
+      },
+      hookDeps,
+    );
+    initial.acknowledge?.();
+
+    const discovery = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-adaptive",
+        prompt_id: "prompt-adaptive",
+        tool_calls: [{ tool_name: "Read", tool_input: { file_path: "/workspace/auth.ts" } }],
+      },
+      hookDeps,
+    );
+    expect(discovery.payload).toEqual({});
+
+    const verification = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-adaptive",
+        prompt_id: "prompt-adaptive",
+        tool_calls: [{ tool_name: "Bash", tool_input: { command: "pnpm test" } }],
+      },
+      hookDeps,
+    );
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Implement the authentication change and verify it");
+    expect(prompts[1]).toContain("verification");
+    expect(verification.payload.hookSpecificOutput).toEqual(
+      expect.objectContaining({
+        hookEventName: "PostToolBatch",
+        additionalContext: expect.stringContaining(
+          "[skillful] Recommended now: verification-skill",
+        ),
+      }),
+    );
+    expect(verification.payload.hookSpecificOutput?.additionalContext).not.toContain("runner-0");
+    expect(verification.payload.hookSpecificOutput?.additionalContext.length).toBeLessThanOrEqual(
+      240,
+    );
+  });
+
+  it("passes one strong parent recommendation into a new subagent", async () => {
+    const home = makeHome();
+    let calls = 0;
+    const routeFn = (async () => {
+      calls += 1;
+      return injectedResult("skill:browser", "agent-browser");
+    }) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = deps(home, { TYPESAFE_API_KEY: "k" }, routeFn);
+
+    const initial = await runHook(
+      {
+        prompt: "Verify the application in a real browser",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-subagent",
+        prompt_id: "prompt-subagent",
+      },
+      hookDeps,
+    );
+    initial.acknowledge?.();
+
+    const first = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "SubagentStart",
+        session_id: "session-subagent",
+        prompt_id: "prompt-subagent",
+        agent_id: "agent-browser-check",
+        agent_type: "Explore",
+      },
+      hookDeps,
+    );
+    expect(first.payload.hookSpecificOutput).toEqual(
+      expect.objectContaining({
+        hookEventName: "SubagentStart",
+        additionalContext: expect.stringContaining(
+          "[skillful] Useful for this subagent: agent-browser",
+        ),
+      }),
+    );
+    expect(first.payload.hookSpecificOutput?.additionalContext).not.toMatch(/0\.\d+/);
+    first.acknowledge?.();
+
+    const repeated = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "SubagentStart",
+        session_id: "session-subagent",
+        prompt_id: "prompt-subagent",
+        agent_id: "agent-browser-check",
+        agent_type: "Explore",
+      },
+      hookDeps,
+    );
+    expect(repeated.payload).toEqual({});
+    expect(calls).toBe(1);
+  });
+
+  it("initializes subagent adaptive state even when the parent had no recommendation", async () => {
+    const home = makeHome();
+    let calls = 0;
+    const routeFn = (async () => {
+      calls += 1;
+      return calls === 1 ? SKIPPED : injectedResult("skill:verify", "verification-skill");
+    }) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = deps(home, { TYPESAFE_API_KEY: "k" }, routeFn);
+
+    await runHook(
+      {
+        prompt: "Implement the change and let delegated work verify it",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-subagent-route",
+        prompt_id: "prompt-subagent-route",
+      },
+      hookDeps,
+    );
+    const start = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "SubagentStart",
+        session_id: "session-subagent-route",
+        prompt_id: "prompt-subagent-route",
+        agent_id: "agent-verify",
+        agent_type: "Explore",
+      },
+      hookDeps,
+    );
+    expect(start.payload).toEqual({});
+
+    await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-subagent-route",
+        prompt_id: "prompt-subagent-route",
+        agent_id: "agent-verify",
+        agent_type: "Explore",
+        tool_calls: [{ tool_name: "Read", tool_input: { file_path: "/workspace/a.ts" } }],
+      },
+      hookDeps,
+    );
+    const verification = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-subagent-route",
+        prompt_id: "prompt-subagent-route",
+        agent_id: "agent-verify",
+        agent_type: "Explore",
+        tool_calls: [{ tool_name: "Bash", tool_input: { command: "pnpm test" } }],
+      },
+      hookDeps,
+    );
+
+    expect(verification.payload.hookSpecificOutput?.additionalContext).toContain(
+      "[skillful] Recommended now: verification-skill",
+    );
+    expect(calls).toBe(2);
+  });
+
+  it("does not reroute after the recommended capability was successfully adopted", async () => {
+    const home = makeHome();
+    let calls = 0;
+    const initialResult = injectedResult(
+      "claude-code:mcp-tool:global:mcp__github__search_issues",
+      "mcp__github__search_issues",
+    );
+    if (initialResult.decision.kind !== "injected") throw new Error("invalid fixture");
+    initialResult.decision.primary.kind = "mcp-tool";
+    const routeFn = (async () => {
+      calls += 1;
+      if (calls > 1) throw new Error("adopted capability must suppress a normal reroute");
+      return initialResult;
+    }) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = deps(home, { TYPESAFE_API_KEY: "k" }, routeFn);
+
+    const initial = await runHook(
+      {
+        prompt: "Search the GitHub issue history before changing the implementation",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-adoption",
+        prompt_id: "prompt-adoption",
+      },
+      hookDeps,
+    );
+    initial.acknowledge?.();
+    await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-adoption",
+        prompt_id: "prompt-adoption",
+        tool_calls: [{ tool_name: "Read", tool_input: { file_path: "/workspace/a.ts" } }],
+      },
+      hookDeps,
+    );
+    const adopted = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-adoption",
+        prompt_id: "prompt-adoption",
+        tool_calls: [
+          {
+            tool_name: "mcp__github__search_issues",
+            tool_input: { query: "authentication" },
+            tool_response: { items: [] },
+          },
+        ],
+      },
+      hookDeps,
+    );
+
+    expect(adopted.payload).toEqual({});
+    expect(calls).toBe(1);
+  });
+
+  it("never recommends a capability that already ran successfully in the current batch", async () => {
+    const home = makeHome();
+    const usedId = "claude-code:cli-command:global:pnpm-test";
+    const catalog: Catalog = {
+      fingerprint: "fp-used-cli",
+      warnings: [],
+      entries: [
+        {
+          id: usedId,
+          kind: "cli-command",
+          name: "pnpm test",
+          description: "Run the package test script",
+          runtime: "claude-code",
+          scope: "global",
+          sourcePath: "/commands/pnpm-test",
+          details: {
+            type: "cli-command",
+            executablePath: "/opt/homebrew/bin/pnpm",
+            executableRealPath: "/opt/homebrew/bin/pnpm",
+            commandPath: ["pnpm", "test"],
+            invocationHint: "pnpm test",
+            metadataSource: "carapace",
+            installManager: "pnpm",
+            packageName: "pnpm",
+            availability: "available",
+            observedAt: "2026-09-23T00:00:00.000Z",
+          },
+        },
+      ],
+    };
+    let calls = 0;
+    const routeFn = (async () => {
+      calls += 1;
+      return calls === 1 ? SKIPPED : injectedResult(usedId, "pnpm test");
+    }) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = {
+      ...deps(home, { TYPESAFE_API_KEY: "k" }, routeFn),
+      scan: async () => catalog,
+    };
+
+    await runHook(
+      {
+        prompt: "Implement the CLI change and run its tests",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-current-use",
+        prompt_id: "prompt-current-use",
+      },
+      hookDeps,
+    );
+    await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-current-use",
+        prompt_id: "prompt-current-use",
+        tool_calls: [{ tool_name: "Read", tool_input: { file_path: "/workspace/cli.ts" } }],
+      },
+      hookDeps,
+    );
+    const verification = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-current-use",
+        prompt_id: "prompt-current-use",
+        tool_calls: [
+          {
+            tool_name: "Bash",
+            tool_input: { command: "pnpm test" },
+            tool_response: { exit_code: 0, output: "tests passed" },
+          },
+        ],
+      },
+      hookDeps,
+    );
+
+    expect(verification.payload).toEqual({});
+    expect(calls).toBe(1);
+  });
+
+  it("fails open when an adaptive route throws unexpectedly", async () => {
+    const home = makeHome();
+    let calls = 0;
+    const routeFn = (async () => {
+      calls += 1;
+      if (calls === 1) return injectedResult("skill:initial", "initial-skill");
+      throw new Error("adaptive provider exploded");
+    }) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = deps(home, { TYPESAFE_API_KEY: "k" }, routeFn);
+
+    const initial = await runHook(
+      {
+        prompt: "Implement and verify the authentication change",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-fail-open",
+        prompt_id: "prompt-fail-open",
+      },
+      hookDeps,
+    );
+    initial.acknowledge?.();
+    await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-fail-open",
+        prompt_id: "prompt-fail-open",
+        tool_calls: [{ tool_name: "Read", tool_input: { file_path: "/workspace/auth.ts" } }],
+      },
+      hookDeps,
+    );
+
+    const outcome = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-fail-open",
+        prompt_id: "prompt-fail-open",
+        tool_calls: [{ tool_name: "Bash", tool_input: { command: "pnpm test" } }],
+      },
+      hookDeps,
+    );
+
+    expect(outcome.payload).toEqual({});
+    expect(outcome.degraded).toBe(true);
+    expect(outcome.reason).toContain("adaptive provider exploded");
+  });
+
+  it("offers at most one immediate recovery suggestion per user prompt", async () => {
+    const home = makeHome();
+    let calls = 0;
+    const routeFn = (async () => {
+      calls += 1;
+      return calls === 1
+        ? injectedResult("skill:initial", "initial-skill")
+        : injectedResult("skill:recovery", "recovery-skill", 2);
+    }) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = deps(home, { TYPESAFE_API_KEY: "k" }, routeFn);
+
+    const initial = await runHook(
+      {
+        prompt: "Install the missing formatter and finish verification",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-recovery",
+        prompt_id: "prompt-recovery",
+      },
+      hookDeps,
+    );
+    initial.acknowledge?.();
+
+    const recovery = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-recovery",
+        prompt_id: "prompt-recovery",
+        tool_calls: [
+          {
+            tool_name: "Bash",
+            tool_input: { command: "ruff check ." },
+            tool_response: { exit_code: 127, output: "ruff: command not found" },
+          },
+        ],
+      },
+      hookDeps,
+    );
+    expect(recovery.payload.hookSpecificOutput?.additionalContext).toContain(
+      "[skillful] Recovery suggestion: recovery-skill",
+    );
+    expect(recovery.payload.hookSpecificOutput?.additionalContext).not.toContain("runner-0");
+    recovery.acknowledge?.();
+
+    const repeated = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "PostToolBatch",
+        session_id: "session-recovery",
+        prompt_id: "prompt-recovery",
+        tool_calls: [
+          {
+            tool_name: "Bash",
+            tool_input: { command: "missing-linter ." },
+            tool_response: { exit_code: 127, output: "missing-linter: command not found" },
+          },
+        ],
+      },
+      hookDeps,
+    );
+    expect(repeated.payload).toEqual({});
+    expect(calls).toBe(2);
+  });
+
+  it("removes private adaptive state when the Claude session ends", async () => {
+    const home = makeHome();
+    const routeFn = (async () =>
+      injectedResult(
+        "skill:browser",
+        "agent-browser",
+      )) as unknown as typeof import("../router/route.js").route;
+    const hookDeps = deps(home, { TYPESAFE_API_KEY: "k" }, routeFn);
+
+    const initial = await runHook(
+      {
+        prompt: "Verify the UI in a browser",
+        runtime: "claude-code",
+        hook_event_name: "UserPromptSubmit",
+        session_id: "session-cleanup",
+        prompt_id: "prompt-cleanup",
+      },
+      hookDeps,
+    );
+    initial.acknowledge?.();
+    const ended = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "SessionEnd",
+        session_id: "session-cleanup",
+      },
+      hookDeps,
+    );
+    expect(ended.degraded).toBe(false);
+
+    const afterEnd = await runHook(
+      {
+        prompt: "",
+        runtime: "claude-code",
+        hook_event_name: "SubagentStart",
+        session_id: "session-cleanup",
+        prompt_id: "prompt-cleanup",
+        agent_id: "agent-after-end",
+        agent_type: "Explore",
+      },
+      hookDeps,
+    );
+    expect(afterEnd.payload).toEqual({});
+  });
+
   it("passes the active runtime into catalog scanning", async () => {
     const home = makeHome();
     let options: Record<string, unknown> | undefined;
@@ -754,11 +1340,7 @@ describe("runner", () => {
 
     const outcome = await runHook(
       { prompt: "refactor the auth middleware" },
-      deps(
-        home,
-        { SKILLFUL_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "v" },
-        routeFn,
-      ),
+      deps(home, { SKILLFUL_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "v" }, routeFn),
     );
 
     expect(outcome.degraded).toBe(false);

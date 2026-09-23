@@ -10,7 +10,9 @@ machine, not from documentation alone.
 ```text
 prompt
   |
-  +-- hook (per runtime)          reads the prompt, consults the cache, applies a 2000ms budget
+  +-- UserPromptSubmit hook       reads the prompt, consults the cache, applies a 2000ms budget
+  |
+  +-- Claude PostToolBatch        local phase/failure/adoption gate; normally emits nothing
   |
   +-- SessionStart refresh        asynchronous, exact client MCP/plugin state + CLI trees
   |
@@ -18,7 +20,7 @@ prompt
   |
   +-- router (one Jev request)    BM25 shortlist -> one `choice` question plus per-candidate `noul`
   |
-  +-- inject                      at most 1 primary + 2 runner-ups, or nothing at all
+  +-- inject                      initial: 1 primary + 2 runner-ups; adaptive: 1 primary only
 ```
 
 ## Catalog surfaces
@@ -149,7 +151,7 @@ Two mechanisms cover four runtimes, because two pairs of runtimes share a contra
 
 | Runtime | File | Mechanism |
 |---|---|---|
-| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json` | `UserPromptSubmit` routes; asynchronous `SessionStart` refresh; `PostCompact`/resume reminders |
+| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json` | `UserPromptSubmit` initial route; `PostToolBatch` adaptive route; `SubagentStart` handoff; `SessionEnd` cleanup; asynchronous refresh on session/config/scope changes; `PostCompact`/resume reminders |
 | Codex | `~/.codex/hooks.json` | `UserPromptSubmit` routes; asynchronous `SessionStart` refreshes Codex MCP/plugin + CLI cache |
 | Pi | `~/.pi/agent/extensions/skillful/index.ts` | extension, `before_agent_start` |
 | OMP | `~/.omp/agent/extensions/skillful/index.ts` | extension, `before_agent_start` |
@@ -157,6 +159,29 @@ Two mechanisms cover four runtimes, because two pairs of runtimes share a contra
 The two extension runtimes share one generated file, which forwards the prompt to `skillful hook`
 on a child process. That keeps one implementation of routing, caching, budgeting and rendering —
 the CLI's — serving all four runtimes instead of a second one that would drift from the first.
+
+### Claude adaptive routing
+
+Claude Code receives a second routing opportunity inside a long user turn. `PostToolBatch` fires
+once after a full batch of parallel tool calls and before the next model request, so it is the
+coalescing boundary rather than one process per `PostToolUse`.
+
+The hook stores a private per-session and per-agent record containing the bounded user goal, current
+phase, batch count, shown and observed-used capability IDs, and the strongest current recommendation.
+The file is mode `0600`, its path contains only hashes, and `SessionEnd` removes the session
+directory. Delivery-dependent dedupe is committed only after stdout flushes successfully.
+
+Before another Jev call, deterministic code requires new evidence and either a meaningful phase
+change or a classified failure. Discovery-only batches remain silent. A successful use of the
+current MCP, CLI, agent, skill or command suppresses normal rerouting; a failed use may still open
+one recovery slot. Each prompt permits at most one normal and one recovery intervention. The
+mid-task renderer emits one primary, no runner-ups, no raw confidence values, and at most 240
+characters. `SKILLFUL_ADAPTIVE=0` disables this layer without disabling initial prompt routing.
+
+`SubagentStart` does not expose the delegated prompt. It therefore never makes a new Jev request:
+it can pass one strong, unused parent recommendation into that subagent and then deduplicates it in
+the subagent's own state. `Stop`, `PostToolUse`, `PreToolUse`, `TaskCompleted` and idle events are
+not recommendation surfaces.
 
 ### Exact MCP and CLI capability cache
 
@@ -166,7 +191,7 @@ last known entries as stale diagnostic evidence but excludes them from routing; 
 from an authoritative client inventory removes its partition.
 
 The installed `SessionStart` hook is asynchronous for both Codex and Claude Code. It runs once for
-`startup`, `resume`, or `clear` without blocking the first prompt. Before it waits for the shared
+`startup`, `resume`, `clear`, or `fork` without blocking the first prompt. Before it waits for the shared
 lock, it publishes a per-runtime/workspace marker that makes affected old partitions unroutable.
 After acquiring the lock it checkpoints them as stale, then atomically publishes each completed
 partition. A queued, timed-out, or interrupted refresh therefore cannot expose an old inventory as
@@ -197,6 +222,11 @@ basename after a manager proves direct ownership. Recursive Carapace `export` JS
 metadata source. A bounded, sandboxed `--help` walk exists only for a small explicit adapter set
 when structured export is unavailable. BM25 selects within a dedicated CLI quota before Jev makes
 the final choice.
+
+Manager compatibility was reverified on 2026-09-23. pnpm 12.5.1 can install a deliberately
+shebang-less shell shim; direct macOS `spawn` returns `ENOEXEC`, so the trusted command runner retries
+that exact executable and argv through `/bin/sh` only for `ENOEXEC`. Bun 1.4.2 reports global roots
+as `node_modules (N installed)`; both that header and the earlier `node_modules (N)` form are parsed.
 
 ### Claude reminder layer
 

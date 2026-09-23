@@ -137,6 +137,34 @@ describe("Jev provider routing", () => {
     expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body)).model).toBe("custom-model");
   });
 
+  it.each([502, 503, 504])("retries transient gateway HTTP %s responses", async (status) => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("temporary", { status }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ answers: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const sleepSpy = vi.fn(async () => undefined);
+
+    const result = await callSystemOne(
+      { state: "state", model: "", questions: {} },
+      {
+        provider: "vercel",
+        env: { AI_GATEWAY_API_KEY: "vercel-key" },
+        fetchImpl: fetchSpy as unknown as typeof fetch,
+        sleepImpl: sleepSpy,
+        maxRetries: 1,
+      },
+    );
+
+    expect(result.model).toBe("typesafe-ai/jev");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(sleepSpy).toHaveBeenCalledWith(250);
+  });
+
   it("classifies the per-attempt abort as a timeout instead of a network failure", async () => {
     const fetchImpl = (async (_url: string | URL, init?: RequestInit) =>
       await new Promise<Response>((_resolve, reject) => {
